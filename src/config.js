@@ -11,20 +11,16 @@ if (result.error && result.error.code !== 'ENOENT') {
 }
 console.log('Config: env loaded (path:', envPath, ')');
 
-function requireEnv(name) {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}. Add it to ${envPath} (see .env.example)`);
-  }
-  return value;
+// Returns the value or empty string — does NOT throw at module load time.
+// Validation happens later in main() via checkEnvLoaded().
+function getEnv(name) {
+  return process.env[name] || '';
 }
 
 export const config = {
-  telegramBotToken: requireEnv('TELEGRAM_BOT_TOKEN'),
-  geminiApiKey: requireEnv('GEMINI_API_KEY'),
-  // Webhook URL for Telegram (required when not using long polling)
+  telegramBotToken: getEnv('TELEGRAM_BOT_TOKEN'),
+  geminiApiKey: getEnv('GEMINI_API_KEY'),
   webhookUrl: process.env.WEBHOOK_URL || 'https://imagetext-to-image-bot-asd9azexgqhxb2hs.northeurope-01.azurewebsites.net',
-  // Gemini model with native image generation (text and image+text → image)
   geminiImageModel: process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image-preview',
   maxImagesPerRequest: Math.min(parseInt(process.env.MAX_IMAGES_PER_REQUEST, 10) || 1, 4),
 };
