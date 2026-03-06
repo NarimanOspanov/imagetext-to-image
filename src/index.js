@@ -141,6 +141,17 @@ async function main() {
   console.log('Starting bot (webhook mode)...');
 
   const port = process.env.PORT || 3000;
+
+  // Start HTTP server first so Azure health probes get an immediate 200 OK
+  const app = express();
+  app.get('/', (_req, res) => res.status(200).send('OK'));
+  app.use(express.json());
+  app.use(bot.webhookCallback('/'));
+
+  await new Promise((resolve) => app.listen(port, resolve));
+  console.log('HTTP server listening on port', port);
+
+  // Telegram setup after the port is bound
   console.log('Checking Telegram connection (getMe)...');
   try {
     await Promise.race([
@@ -150,23 +161,18 @@ async function main() {
       ),
     ]);
   } catch (err) {
-    throw new Error(
-      `Cannot reach Telegram: ${err.message}. Check TELEGRAM_BOT_TOKEN and network (api.telegram.org).`
-    );
+    console.error(`Cannot reach Telegram: ${err.message}. Check TELEGRAM_BOT_TOKEN and network.`);
+    return;
   }
+
   const webhookUrl = config.webhookUrl.replace(/\/$/, '');
   console.log('Telegram OK. Setting webhook:', webhookUrl);
-  await bot.telegram.setWebhook(webhookUrl);
-  console.log('Webhook set successfully.');
-
-  const app = express();
-  app.get('/', (_req, res) => res.status(200).send('OK'));
-  app.use(express.json());
-  app.use(bot.webhookCallback('/'));
-
-  app.listen(port, () => {
-    console.log('Bot webhook server listening on port', port, '– send /start in Telegram.');
-  });
+  try {
+    await bot.telegram.setWebhook(webhookUrl);
+    console.log('Webhook set successfully. Bot is ready – send /start in Telegram.');
+  } catch (err) {
+    console.error('Failed to set webhook:', err.message);
+  }
 }
 
 main().catch((err) => {
