@@ -25,7 +25,7 @@ function checkEnvLoaded() {
   }
 }
 
-const bot = new Telegraf(config.telegramBotToken);
+const bot = new Telegraf(config.telegramBotToken, { handlerTimeout: 300_000 }); // 5 min, Gemini can be slow
 
 async function downloadPhotoBuffer(ctx, fileId) {
   const file = await ctx.telegram.getFile(fileId);
