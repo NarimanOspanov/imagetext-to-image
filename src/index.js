@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
+import express from 'express';
 import { Telegraf } from 'telegraf';
 import { config } from './config.js';
 import {
@@ -151,14 +152,19 @@ async function main() {
       `Cannot reach Telegram: ${err.message}. Check TELEGRAM_BOT_TOKEN and network (api.telegram.org).`
     );
   }
-  console.log('Telegram OK. Launching long polling...');
-  // Don't await launch() – in Telegraf it can hang forever during long polling (known issue #1989)
-  bot.launch()
-    .then(() => console.log('Bot is running. Send /start in Telegram.'))
-    .catch((err) => {
-      console.error('Launch failed:', err);
-      process.exit(1);
-    });
+  const webhookUrl = config.webhookUrl.replace(/\/$/, '');
+  console.log('Telegram OK. Setting webhook:', webhookUrl);
+  await bot.telegram.setWebhook(webhookUrl);
+
+  const app = express();
+  app.get('/', (_req, res) => res.status(200).send('OK'));
+  app.use(express.json());
+  app.use(bot.webhookCallback('/'));
+
+  const port = process.env.PORT || 3000;
+  app.listen(port, () => {
+    console.log('Bot webhook server listening on port', port, '– send /start in Telegram.');
+  });
 }
 
 main().catch((err) => {
@@ -166,5 +172,4 @@ main().catch((err) => {
   process.exit(1);
 });
 
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+// Graceful shutdown not needed for webhook (no long-running polling)
