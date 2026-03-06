@@ -9,6 +9,7 @@ const result = dotenv.config({ path: envPath });
 if (result.error && result.error.code !== 'ENOENT') {
   console.error('Error loading .env:', result.error.message);
 }
+console.log('Config: env loaded (path:', envPath, ')');
 
 function requireEnv(name) {
   const value = process.env[name];

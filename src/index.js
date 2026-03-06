@@ -136,9 +136,11 @@ bot.catch((err, ctx) => {
 });
 
 async function main() {
+  process.stdout.write('App: main() started\n');
   checkEnvLoaded();
-  console.log('Starting bot...');
+  console.log('Starting bot (webhook mode)...');
 
+  const port = process.env.PORT || 3000;
   console.log('Checking Telegram connection (getMe)...');
   try {
     await Promise.race([
@@ -155,13 +157,13 @@ async function main() {
   const webhookUrl = config.webhookUrl.replace(/\/$/, '');
   console.log('Telegram OK. Setting webhook:', webhookUrl);
   await bot.telegram.setWebhook(webhookUrl);
+  console.log('Webhook set successfully.');
 
   const app = express();
   app.get('/', (_req, res) => res.status(200).send('OK'));
   app.use(express.json());
   app.use(bot.webhookCallback('/'));
 
-  const port = process.env.PORT || 3000;
   app.listen(port, () => {
     console.log('Bot webhook server listening on port', port, '– send /start in Telegram.');
   });
