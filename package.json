@@ -1,0 +1,21 @@
+{
+  "name": "imagetext-to-image-telegram",
+  "version": "1.0.0",
+  "description": "Telegram bot for image and text-to-image generation using Gemini API",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": ["telegram", "bot", "gemini", "imagen", "image-generation"],
+  "license": "MIT",
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "dotenv": "^16.4.5",
+    "telegraf": "^4.16.3"
+  }
+}
