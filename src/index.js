@@ -46,29 +46,29 @@ function getPhotoMimeType(filePath) {
 
 bot.start((ctx) => {
   return ctx.reply(
-    '👋 Hi! I generate images with Gemini.\n\n' +
-    '• Send me *text* and I\'ll create an image from your description.\n' +
-    '• Send me a *photo* (with optional caption) and I\'ll create a new image based on it.\n\n' +
-    'Examples:\n' +
-    '— "A cat wearing a space suit on Mars"\n' +
-    '— Send a photo with caption: "make it oil painting style"',
+    '👋 Привет! Я создаю изображения с помощью Gemini.\n\n' +
+    '• Отправь *текст* — я создам картинку по твоему описанию.\n' +
+    '• Отправь *фото* (с подписью или без) — создам новое изображение на его основе.\n\n' +
+    'Примеры:\n' +
+    '— «Кот в скафандре на Марсе»\n' +
+    '— Фото с подписью: «сделай в стиле масляной живописи»',
     { parse_mode: 'Markdown' }
   );
 });
 
 bot.help((ctx) => {
   return ctx.reply(
-    'Text → image: send any description.\n' +
-    'Image + text → image: send a photo; add a caption to guide the style or changes.'
+    'Текст → картинка: отправь любое описание.\n' +
+    'Фото + текст → картинка: отправь фото, в подписи укажи стиль или изменения.'
   );
 });
 
 // Text message → text-to-image
 bot.on('text', async (ctx) => {
   const prompt = ctx.message.text.trim();
-  if (!prompt) return ctx.reply('Send a description of the image you want to generate.');
+  if (!prompt) return ctx.reply('Опиши, какую картинку нужно сгенерировать.');
 
-  const msg = await ctx.reply('⏳ Generating image...');
+  const msg = await ctx.reply('⏳ Генерирую изображение...');
   try {
     const images = await generateImagesFromText(prompt, config.maxImagesPerRequest);
     if (images.length === 0) {
@@ -76,7 +76,7 @@ bot.on('text', async (ctx) => {
         ctx.chat.id,
         msg.message_id,
         null,
-        'No image was generated. Try a different prompt.'
+        'Изображение не создано. Попробуй другой запрос.'
       );
       return;
     }
@@ -87,8 +87,8 @@ bot.on('text', async (ctx) => {
   } catch (err) {
     console.error('Text-to-image error:', err);
     const text = err?.message?.includes('SAFETY')
-      ? 'The prompt was blocked by safety filters. Try a different description.'
-      : 'Something went wrong. Please try again.';
+      ? 'Запрос заблокирован фильтрами безопасности. Попробуй другое описание.'
+      : 'Что-то пошло не так. Попробуй ещё раз.';
     await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, text).catch(() => {});
   }
 });
@@ -97,7 +97,7 @@ bot.on('text', async (ctx) => {
 bot.on('photo', async (ctx) => {
   const caption = (ctx.message.caption || '').trim();
   const photo = ctx.message.photo.slice(-1)[0];
-  const msg = await ctx.reply('⏳ Processing image and generating new one...');
+  const msg = await ctx.reply('⏳ Обрабатываю фото и генерирую новое изображение...');
 
   try {
     const { buffer: imageBuffer, filePath } = await downloadPhotoBuffer(ctx, photo.file_id);
@@ -108,7 +108,7 @@ bot.on('photo', async (ctx) => {
         ctx.chat.id,
         msg.message_id,
         null,
-        'No image was generated. Try another photo or caption.'
+        'Изображение не создано. Попробуй другое фото или подпись.'
       );
       return;
     }
@@ -123,7 +123,7 @@ bot.on('photo', async (ctx) => {
         ctx.chat.id,
         msg.message_id,
         null,
-        'Failed to process the image. Please try again.'
+        'Не удалось обработать изображение. Попробуй ещё раз.'
       )
       .catch(() => {});
   }
@@ -131,7 +131,7 @@ bot.on('photo', async (ctx) => {
 
 bot.catch((err, ctx) => {
   console.error('Bot error:', err);
-  return ctx.reply('An error occurred. Please try again later.');
+  return ctx.reply('Произошла ошибка. Попробуй позже.');
 });
 
 async function main() {

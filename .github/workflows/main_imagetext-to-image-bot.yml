@@ -42,10 +42,8 @@ jobs:
           name: node-app
           path: deploy-app
 
-  # Required GitHub Secrets for deploy + app env vars:
-  # - AZUREAPPSERVICE_PUBLISHPROFILE_... (publish profile)
-  # - TELEGRAM_BOT_TOKEN, GEMINI_API_KEY (for the bot)
-  # - AZURE_CREDENTIALS (service principal JSON), AZURE_WEBAPP_RESOURCE_GROUP (for setting app settings)
+  # GitHub: AZUREAPPSERVICE_PUBLISHPROFILE_95A0C70C5DC74B73939BF0BBA7509A48 (for deploying)
+  # Bot env: TELEGRAM_BOT_TOKEN, GEMINI_API_KEY — set in Azure Portal → App Service → Configuration → Application settings
   deploy:
     runs-on: ubuntu-latest
     needs: build
@@ -58,20 +56,6 @@ jobs:
 
       - name: Install production dependencies
         run: npm ci || npm install --omit=dev
-
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Set App Service app settings (Telegram + Gemini)
-        run: |
-          az webapp config appsettings set \
-            --name imagetext-to-image-bot \
-            --resource-group "${{ secrets.AZURE_WEBAPP_RESOURCE_GROUP }}" \
-            --settings \
-              TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
-              GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}"
 
       - name: 'Deploy to Azure Web App'
         id: deploy-to-webapp
