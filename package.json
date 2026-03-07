@@ -11,12 +11,21 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  "keywords": ["telegram", "bot", "gemini", "imagen", "image-generation"],
+  "keywords": [
+    "telegram",
+    "bot",
+    "gemini",
+    "imagen",
+    "image-generation"
+  ],
   "license": "MIT",
   "dependencies": {
     "@google/genai": "^1.0.0",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
+    "sequelize": "^6.37.7",
+    "sequelize-auto": "^0.8.8",
+    "tedious": "^19.2.1",
     "telegraf": "^4.16.3"
   }
 }
