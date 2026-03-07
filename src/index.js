@@ -3,6 +3,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Telegraf } from 'telegraf';
+import { Sequelize } from 'sequelize';
 import { config } from './config.js';
 import { sequelize, models } from './db.js';
 import {
@@ -50,15 +51,24 @@ function registerHandlers(bot) {
 
     try {
       await sequelize.authenticate();
-      const [user, created] = await models.Users.findOrCreate({
-        where: { TelegramChatId: chatId },
-        defaults: {
-          TelegramChatId: chatId,
-          TelegramUserName: username,
-          DateJoined: new Date(),
-        },
-      });
-      if (!created && username != null) {
+      let user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
+      if (!user) {
+        try {
+          user = await models.Users.create({
+            TelegramChatId: chatId,
+            TelegramUserName: username,
+            // MSSQL rejects driver's date string (+00:00); use SQL expression so no conversion
+            DateJoined: Sequelize.literal('GETUTCDATE()'),
+          });
+        } catch (createErr) {
+          // Race: another /start created the row; fetch it
+          if (createErr?.name === 'SequelizeUniqueConstraintError') {
+            user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
+          } else {
+            throw createErr;
+          }
+        }
+      } else if (username != null) {
         await user.update({ TelegramUserName: username });
       }
     } catch (err) {
@@ -167,14 +177,10 @@ async function main() {
     return;
   }
 
-  // ── Step 3: create bot and attach webhook middleware ──
+  // ── Step 3: create bot and register handlers ──
   const bot = new Telegraf(config.telegramBotToken, { handlerTimeout: 300_000 });
   registerHandlers(bot);
 
-  app.use(express.json());
-  app.use(bot.webhookCallback('/'));
-
-  // ── Step 4: connect to Telegram and register webhook ──
   console.log('Checking Telegram connection (getMe)...');
   try {
     await Promise.race([
@@ -187,14 +193,25 @@ async function main() {
     console.error('Cannot reach Telegram:', err.message);
     return;
   }
+  console.log('Telegram OK.');
 
-  const webhookUrl = config.webhookUrl.replace(/\/$/, '');
-  console.log('Telegram OK. Setting webhook:', webhookUrl);
-  try {
-    await bot.telegram.setWebhook(webhookUrl);
-    console.log('Webhook set. Bot is ready – send /start in Telegram.');
-  } catch (err) {
-    console.error('Failed to set webhook:', err.message);
+  if (config.isProduction) {
+    // Production: receive updates via webhook
+    app.use(express.json());
+    app.use(bot.webhookCallback('/'));
+    const webhookUrl = config.webhookUrl.replace(/\/$/, '');
+    console.log('Setting webhook:', webhookUrl);
+    try {
+      await bot.telegram.setWebhook(webhookUrl);
+      console.log('Webhook set. Bot is ready – send /start in Telegram.');
+    } catch (err) {
+      console.error('Failed to set webhook:', err.message);
+    }
+  } else {
+    // Local/testing: receive updates via long polling (no public URL needed)
+    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+    await bot.launch();
+    console.log('Polling started. Bot is ready – send /start in Telegram.');
   }
 }
 
