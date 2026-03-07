@@ -36,6 +36,11 @@ module.exports = function(sequelize, DataTypes) {
     Timezone: {
       type: DataTypes.DATE,
       allowNull: true
+    },
+    GenerationsCount: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 3
     }
   }, {
     sequelize,

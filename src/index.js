@@ -44,6 +44,27 @@ function getPhotoMimeType(filePath) {
   return 'image/jpeg';
 }
 
+async function getUserGenerationsCount(chatId) {
+  try {
+    const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
+    return user ? (user.GenerationsCount ?? 0) : 0;
+  } catch (err) {
+    console.error('DB error reading GenerationsCount:', err);
+    return 0;
+  }
+}
+
+async function decrementUserGenerationsCount(chatId) {
+  try {
+    const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
+    if (user && (user.GenerationsCount ?? 0) > 0) {
+      await user.update({ GenerationsCount: Math.max(0, (user.GenerationsCount || 0) - 1) });
+    }
+  } catch (err) {
+    console.error('DB error decrementing GenerationsCount:', err);
+  }
+}
+
 function registerHandlers(bot) {
   bot.start(async (ctx) => {
     const chatId = ctx.chat?.id;
@@ -98,6 +119,11 @@ function registerHandlers(bot) {
     const prompt = ctx.message.text.trim();
     if (!prompt) return ctx.reply('Опиши, какую картинку нужно сгенерировать.');
 
+    const count = await getUserGenerationsCount(ctx.chat.id);
+    if (count <= 0) {
+      return ctx.reply('У вас закончились бесплатные генерации. Осталось: 0.');
+    }
+
     const msg = await ctx.reply('⏳ Генерирую изображение...');
     try {
       const images = await generateImagesFromText(prompt, config.maxImagesPerRequest);
@@ -112,6 +138,7 @@ function registerHandlers(bot) {
       for (const buffer of images) {
         await ctx.replyWithPhoto({ source: buffer, filename: 'image.png' });
       }
+      await decrementUserGenerationsCount(ctx.chat.id);
     } catch (err) {
       console.error('Text-to-image error:', err);
       const text = err?.message?.includes('SAFETY')
@@ -123,6 +150,11 @@ function registerHandlers(bot) {
 
   // Photo (with optional caption) → image + text to image
   bot.on('photo', async (ctx) => {
+    const count = await getUserGenerationsCount(ctx.chat.id);
+    if (count <= 0) {
+      return ctx.reply('У вас закончились бесплатные генерации. Осталось: 0.');
+    }
+
     const caption = (ctx.message.caption || '').trim();
     const photo = ctx.message.photo.slice(-1)[0];
     const msg = await ctx.reply('⏳ Обрабатываю фото и генерирую новое изображение...');
@@ -142,6 +174,7 @@ function registerHandlers(bot) {
       for (const buffer of images) {
         await ctx.replyWithPhoto({ source: buffer, filename: 'image.png' });
       }
+      await decrementUserGenerationsCount(ctx.chat.id);
     } catch (err) {
       console.error('Image+text-to-image error:', err);
       await ctx.telegram
