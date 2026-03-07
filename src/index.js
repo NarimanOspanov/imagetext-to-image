@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Telegraf } from 'telegraf';
 import { config } from './config.js';
+import { sequelize, models } from './db.js';
 import {
   generateImagesFromText,
   imageAndTextToImage,
@@ -43,7 +44,27 @@ function getPhotoMimeType(filePath) {
 }
 
 function registerHandlers(bot) {
-  bot.start((ctx) => {
+  bot.start(async (ctx) => {
+    const chatId = ctx.chat?.id;
+    const username = ctx.from?.username ?? null;
+
+    try {
+      await sequelize.authenticate();
+      const [user, created] = await models.Users.findOrCreate({
+        where: { TelegramChatId: chatId },
+        defaults: {
+          TelegramChatId: chatId,
+          TelegramUserName: username,
+          DateJoined: new Date(),
+        },
+      });
+      if (!created && username != null) {
+        await user.update({ TelegramUserName: username });
+      }
+    } catch (err) {
+      console.error('DB error in /start:', err);
+    }
+
     return ctx.reply(
       '👋 Привет! Я создаю изображения с помощью Gemini.\n\n' +
       '• Отправь *текст* — я создам картинку по твоему описанию.\n' +

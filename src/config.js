@@ -23,4 +23,13 @@ export const config = {
   webhookUrl: process.env.WEBHOOK_URL || 'https://imagetext-to-image-bot-asd9azexgqhxb2hs.northeurope-01.azurewebsites.net',
   geminiImageModel: process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image-preview',
   maxImagesPerRequest: Math.min(parseInt(process.env.MAX_IMAGES_PER_REQUEST, 10) || 1, 4),
+  // MSSQL (Azure SQL) – override with DB_HOST, DB_NAME, DB_USER, DB_PASSWORD, DB_PORT
+  db: {
+    host: process.env.DB_HOST || 'sql-st-prod.database.windows.net',
+    port: parseInt(process.env.DB_PORT, 10) || 1433,
+    database: process.env.DB_NAME || 'sql-photo-ai-prod',
+    username: process.env.DB_USER || 'stadmin',
+    password: process.env.DB_PASSWORD || 'Password123!',
+    dialect: 'mssql',
+  },
 };
