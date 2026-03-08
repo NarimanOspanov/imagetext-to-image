@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -37,6 +37,13 @@ const IMAGE_MODELS = [
     description: 'Seedream 🧠 - Максимально точное следование описанию и референсам, отлично подходит для сложных сцен, стилей и нестандартных запросов.',
   },
 ];
+
+/** Map our model id (Users.ActiveModel) to Gemini API model id. Env overrides: GEMINI_IMAGE_MODEL, GEMINI_IMAGE_MODEL_PRO, etc. */
+function resolveGeminiModelId(ourModelId) {
+  const envKey = ourModelId === 'standard' ? 'GEMINI_IMAGE_MODEL' : `GEMINI_IMAGE_MODEL_${ourModelId.toUpperCase()}`;
+  const envValue = process.env[envKey] || process.env.GEMINI_IMAGE_MODEL;
+  return envValue || config.geminiImageModel;
+}
 
 function checkEnvLoaded() {
   const token = config.telegramBotToken;
@@ -96,12 +103,14 @@ async function recordImageGenerations(chatId, imageCount, baseFileName = 'image'
   }
 }
 
-/** Resolve user's ActiveModel to Gemini model id (for now all use default). */
+/** Resolve user's ActiveModel to Gemini API model id. Uses IMAGE_MODELS[0].id when user has no selection. */
 async function getGeminiModelForUser(chatId) {
   const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
-  const active = user?.ActiveModel;
-  if (!active) return config.geminiImageModel;
-  return config.geminiImageModel;
+  const active = user?.ActiveModel || IMAGE_MODELS[0].id;
+  if (!IMAGE_MODELS.some((m) => m.id === active)) {
+    return resolveGeminiModelId(IMAGE_MODELS[0].id);
+  }
+  return resolveGeminiModelId(active);
 }
 
 /** Total generations available: referral bonuses (unused) + purchase balance. */
@@ -219,18 +228,37 @@ function registerHandlers(bot, options = {}) {
         console.error('DB error in /start:', err);
       }
 
-      return ctx.reply(
-        '👋 Привет! Я создаю изображения с помощью Gemini.\n\n' +
-        '• Отправь *текст* — я создам картинку по твоему описанию.\n' +
-        '• Отправь *фото* (с подписью или без) — создам новое изображение на его основе.\n\n' +
-        'Примеры:\n' +
-        '— «Кот в скафандре на Марсе»\n' +
-        '— Фото с подписью: «сделай в стиле масляной живописи»',
-        { parse_mode: 'Markdown' }
-      );
+      const startImagePath = join(__dirname, '..', 'startimage.jpg');
+      const welcomeText =
+        'Привет 👋\n\n' +
+        'Я Lexy — твой AI-фотограф.\n\n' +
+        'Создаю реалистичные, стильные портреты, как после съёмки у топового фотографа ✨\n\n' +
+        'Загрузите фото и короткое описание образа, и я покажу вашу лучшую версию.\n\n' +
+        'Выбери, что хочешь сделать';
+      const replyMarkup = {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🖼 Хочу красивую картинку', callback_data: 'start_want_picture' }],
+            [{ text: '💎 Посмотреть идеи', url: 'https://t.me/rabota_5g' }],
+          ],
+        },
+      };
+
+      if (existsSync(startImagePath)) {
+        return ctx.replyWithPhoto(
+          { source: createReadStream(startImagePath) },
+          { caption: welcomeText, ...replyMarkup }
+        );
+      }
+      return ctx.reply(welcomeText, replyMarkup);
     } finally {
       stopTyping();
     }
+  });
+
+  bot.action('start_want_picture', async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.reply('Отправь текст с описанием картинки или фото — и я создам изображение.');
   });
 
   bot.help(async (ctx) => {
