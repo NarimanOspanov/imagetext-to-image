@@ -264,13 +264,73 @@ function registerHandlers(bot, options = {}) {
   bot.help(async (ctx) => {
     const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
     try {
-      return await ctx.reply(
-        'Текст → картинка: отправь любое описание.\n' +
-        'Фото + текст → картинка: отправь фото, в подписи укажи стиль или изменения.'
-      );
+      const text =
+        '🔥 Как пользоваться?\n\n' +
+        '📸 Просто отправь мне до 3х фото, затем описание, что с ним нужно сделать.\n\n' +
+        'Загляните в наш канал, там лучшие стили и промпты:\n' +
+        '[👇 Посмотреть идеи](https://t.me/rabota_5g)';
+      const replyMarkup = {
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true,
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🟥 Не нравится результат', callback_data: 'help_dislike_result' }],
+            [{ text: '💳 Как оплатить?', callback_data: 'help_how_to_pay' }],
+            [{ text: '❗ Не открывается оплата', callback_data: 'help_payment_not_open' }],
+            [{ text: '⚙️ Как сменить модель', callback_data: 'help_change_model' }],
+            [{ text: 'Остались вопросы? ➢', url: 'https://t.me/asich' }],
+          ],
+        },
+      };
+      return await ctx.reply(text, replyMarkup);
     } finally {
       stopTyping();
     }
+  });
+
+  bot.action('help_dislike_result', async (ctx) => {
+    await ctx.answerCbQuery();
+    const text =
+      '🟥 Результат не понравился?\n\n' +
+      'Нейросеть опирается на исходные фотографии и ваш текстовый запрос — мы не можем влиять на результат вручную 😅\n\n' +
+      'Важно учитывать:\n' +
+      '▪️ Качество и ракурс исходного фото напрямую влияют на итог (лицо должно быть чётко видно, хорошее освещение, без очков и сильных поворотов).\n' +
+      '▪️ Чем проще промт и меньше изменений (макияж, причёска, поза), тем более естественным будет результат.\n' +
+      '▪️ Один и тот же запрос может дать разные кадры — каждая генерация уникальна 😊\n\n' +
+      'Совет: попробуйте уточнить запрос и повторить генерацию — это часто заметно улучшает результат ✨';
+    await ctx.reply(text);
+  });
+
+  bot.action('help_how_to_pay', async (ctx) => {
+    const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
+    try {
+      if (ctx.callbackQuery) await ctx.answerCbQuery();
+      await ctx.reply('Выбери удобный способ оплаты ниже 👇', {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🎉 Докупить генерации', callback_data: 'pay_show_packages' }],
+            [
+              { text: 'Оплатить в боте', callback_data: 'pay_in_bot' },
+              { text: 'Оплатить звездами ⭐', callback_data: 'pay_stars_show' },
+            ],
+            [{ text: '🤝 Пригласить друзей и получить бонусы', callback_data: 'pay_referrals' }],
+          ],
+        },
+      });
+    } finally {
+      stopTyping();
+    }
+  });
+
+  bot.action('help_payment_not_open', async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.reply(
+      'Если окно оплаты не открывается, попробуй обновить приложение Telegram или оплатить с другого устройства. Если проблема сохраняется — напиши нам: @asich'
+    );
+  });
+
+  bot.action('help_change_model', async (ctx) => {
+    await sendModelScreen(ctx);
   });
 
   bot.command('account', async (ctx) => {
@@ -544,6 +604,7 @@ function registerHandlers(bot, options = {}) {
       'Ваша персональная ссылка:\n' +
       referralLink;
       await ctx.reply(text, {
+        disable_web_page_preview: true,
         reply_markup: {
           inline_keyboard: [
             [
@@ -769,14 +830,14 @@ async function main() {
 
   registerHandlers(bot, { botUsername });
 
-  // Set menu commands (shown when user taps Menu in bottom-left)
+  // Set menu commands (shown when user taps Menu in bottom-left; emoji = icon next to command)
   const menuCommands = [
-    { command: 'start', description: 'Что умеет бот' },
-    { command: 'account', description: 'Мой профиль' },
-    { command: 'model', description: 'Сменить модель' },
-    { command: 'pay', description: 'Докупить генерации' },
-    { command: 'referrals', description: 'Бонусы за друзей' },
-    { command: 'help', description: 'Помощь' },
+    { command: 'start', description: 'ℹ️ Что умеет бот' },
+    { command: 'account', description: '⚙️ Мой профиль' },
+    { command: 'model', description: '✨ Сменить модель' },
+    { command: 'pay', description: '💎 Докупить генерации' },
+    { command: 'referrals', description: '🎁 Бонусы за друзей' },
+    { command: 'help', description: '❓ Помощь' },
   ];
   try {
     await bot.telegram.setMyCommands(menuCommands);
