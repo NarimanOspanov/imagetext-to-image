@@ -6,7 +6,7 @@ name: Build and deploy Node.js app to Azure Web App - imagetext-to-image-bot
 on:
   push:
     branches:
-      - main
+      - feature/user
   workflow_dispatch:
 
 jobs:
@@ -52,4 +52,5 @@ jobs:
           app-name: 'imagetext-to-image-bot'
           slot-name: 'Production'
           package: .
+
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_95A0C70C5DC74B73939BF0BBA7509A48 }}
