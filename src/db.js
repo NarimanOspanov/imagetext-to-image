@@ -1,9 +1,6 @@
-import { createRequire } from 'node:module';
 import { Sequelize } from 'sequelize';
 import { config } from './config.js';
-
-const require = createRequire(import.meta.url);
-const initModels = require('../models/init-models.cjs');
+import { initModels } from './models/index.js';
 
 const sequelize = new Sequelize(config.db.database, config.db.username, config.db.password, {
   host: config.db.host,

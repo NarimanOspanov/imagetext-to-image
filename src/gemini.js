@@ -22,13 +22,17 @@ function getImagesFromResponse(response) {
 }
 
 /**
- * Text → image: generate image from text prompt using gemini-3.1-flash-image-preview.
+ * Text → image: generate image from text prompt.
+ * @param {string} prompt
+ * @param {number} count
+ * @param {string} [modelId] - optional Gemini model id; defaults to config.geminiImageModel
  */
-export async function generateImagesFromText(prompt, count = 1) {
+export async function generateImagesFromText(prompt, count = 1, modelId = null) {
   const contents = [{ text: prompt }];
+  const model = modelId || config.geminiImageModel;
 
   const response = await ai.models.generateContent({
-    model: config.geminiImageModel,
+    model,
     contents,
   });
 
@@ -41,9 +45,9 @@ export async function generateImagesFromText(prompt, count = 1) {
 
 /**
  * Photo + caption (or photo only) → image: send image and optional text, get generated image.
- * Uses same pattern as example: contents = [{ text }, { inlineData: { mimeType, data } }].
+ * @param {string} [modelId] - optional Gemini model id; defaults to config.geminiImageModel
  */
-export async function imageAndTextToImage(imageBuffer, mimeType, userPrompt = '') {
+export async function imageAndTextToImage(imageBuffer, mimeType, userPrompt = '', modelId = null) {
   const base64 = imageBuffer.toString('base64');
   const text =
     userPrompt.trim() ||
@@ -59,8 +63,9 @@ export async function imageAndTextToImage(imageBuffer, mimeType, userPrompt = ''
     },
   ];
 
+  const model = modelId || config.geminiImageModel;
   const response = await ai.models.generateContent({
-    model: config.geminiImageModel,
+    model,
     contents,
   });
 
