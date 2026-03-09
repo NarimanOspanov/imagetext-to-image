@@ -513,6 +513,76 @@ function registerHandlers(bot, options = {}) {
   // —— Photosets: show presets-based photoshoot ideas and create photoset ——
   const pendingPhotosets = new Map(); // chatId -> { configId }
 
+  function buildPhotosetKeyboard(configs, index) {
+    const count = configs.length;
+    const current = configs[index];
+    const prevIndex = (index - 1 + count) % count;
+    const nextIndex = (index + 1) % count;
+    const keyboard = [
+      [
+        {
+          text: '⬅️',
+          callback_data: `photoset_prev_${configs[prevIndex].Id}`,
+        },
+        {
+          text: '➡️',
+          callback_data: `photoset_next_${configs[nextIndex].Id}`,
+        },
+      ],
+      [
+        {
+          text: 'Создать фотосессию',
+          callback_data: `photoset_create_${current.Id}`,
+        },
+      ],
+    ];
+    return { current, keyboard };
+  }
+
+  async function showPhotosetCard(ctx, configs, index, mode) {
+    const { current, keyboard } = buildPhotosetKeyboard(configs, index);
+    const coverPath = join(__dirname, '..', 'PhotosetCovers', current.Image);
+    const caption = `${current.Name}\n\n${current.Description}`;
+
+    if (mode === 'edit' && ctx.callbackQuery?.message) {
+      const chatId = ctx.chat.id;
+      const messageId = ctx.callbackQuery.message.message_id;
+      if (existsSync(coverPath)) {
+        await ctx.telegram.editMessageMedia(
+          chatId,
+          messageId,
+          undefined,
+          {
+            type: 'photo',
+            media: { source: createReadStream(coverPath) },
+            caption,
+          },
+          {
+            reply_markup: { inline_keyboard: keyboard },
+          }
+        );
+      } else {
+        await ctx.telegram.editMessageText(chatId, messageId, undefined, caption, {
+          reply_markup: { inline_keyboard: keyboard },
+        });
+      }
+    } else {
+      if (existsSync(coverPath)) {
+        await ctx.replyWithPhoto(
+          { source: createReadStream(coverPath) },
+          {
+            caption,
+            reply_markup: { inline_keyboard: keyboard },
+          }
+        );
+      } else {
+        await ctx.reply(caption, {
+          reply_markup: { inline_keyboard: keyboard },
+        });
+      }
+    }
+  }
+
   async function sendPhotosetCard(ctx, configId = null) {
     const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
     try {
@@ -527,47 +597,7 @@ function registerHandlers(bot, options = {}) {
         const foundIndex = configs.findIndex((c) => c.Id === configId);
         if (foundIndex >= 0) index = foundIndex;
       }
-      const current = configs[index];
-      const hasPrev = index > 0;
-      const hasNext = index < configs.length - 1;
-      const coverPath = join(__dirname, '..', 'PhotosetCovers', current.Image);
-      const caption = `${current.Name}\n\n${current.Description}`;
-      const keyboard = [];
-      const navRow = [];
-      if (hasPrev) {
-        navRow.push({
-          text: '⬅️',
-          callback_data: `photoset_prev_${current.Id}`,
-        });
-      }
-      if (hasNext) {
-        navRow.push({
-          text: '➡️',
-          callback_data: `photoset_next_${current.Id}`,
-        });
-      }
-      if (navRow.length > 0) {
-        keyboard.push(navRow);
-      }
-      keyboard.push([
-        {
-          text: 'Создать фотосессию',
-          callback_data: `photoset_create_${current.Id}`,
-        },
-      ]);
-      if (existsSync(coverPath)) {
-        await ctx.replyWithPhoto(
-          { source: createReadStream(coverPath) },
-          {
-            caption,
-            reply_markup: { inline_keyboard: keyboard },
-          }
-        );
-      } else {
-        await ctx.reply(caption, {
-          reply_markup: { inline_keyboard: keyboard },
-        });
-      }
+      await showPhotosetCard(ctx, configs, index, 'reply');
     } finally {
       stopTyping();
     }
@@ -580,8 +610,7 @@ function registerHandlers(bot, options = {}) {
   bot.action(/^photoset_(prev|next)_(\d+)$/, async (ctx) => {
     const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
     try {
-      const direction = ctx.match[1];
-      const currentId = parseInt(ctx.match[2], 10);
+      const targetId = parseInt(ctx.match[2], 10);
       if (ctx.callbackQuery) await ctx.answerCbQuery();
       const configs = await models.PhotosetConfigs.findAll({
         order: [['Id', 'ASC']],
@@ -589,13 +618,11 @@ function registerHandlers(bot, options = {}) {
       if (!configs || configs.length === 0) {
         return ctx.reply('Фотосеты скоро появятся — мы готовим для тебя лучшие подборки.');
       }
-      const index = configs.findIndex((c) => c.Id === currentId);
+      const index = configs.findIndex((c) => c.Id === targetId);
       if (index === -1) {
         return sendPhotosetCard(ctx, null);
       }
-      const nextIndex = direction === 'prev' ? Math.max(0, index - 1) : Math.min(configs.length - 1, index + 1);
-      const target = configs[nextIndex];
-      await sendPhotosetCard(ctx, target.Id);
+      await showPhotosetCard(ctx, configs, index, 'edit');
     } finally {
       stopTyping();
     }
