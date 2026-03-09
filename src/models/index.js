@@ -1,5 +1,6 @@
 import defineUser from './User.js';
 import defineUserImageGeneration from './UserImageGeneration.js';
+import defineGenerationAudit from './GenerationAudit.js';
 import definePricing from './Pricing.js';
 import defineUserPurchase from './UserPurchase.js';
 import defineTelegramPayment from './TelegramPayment.js';
@@ -11,6 +12,7 @@ import defineReferral from './Referral.js';
 export function initModels(sequelize) {
   const User = defineUser(sequelize);
   const UserImageGeneration = defineUserImageGeneration(sequelize);
+  const GenerationAudit = defineGenerationAudit(sequelize);
   const Pricing = definePricing(sequelize);
   const UserPurchase = defineUserPurchase(sequelize);
   const TelegramPayment = defineTelegramPayment(sequelize);
@@ -18,6 +20,9 @@ export function initModels(sequelize) {
 
   User.hasMany(UserImageGeneration, { foreignKey: 'UserId' });
   UserImageGeneration.belongsTo(User, { foreignKey: 'UserId' });
+
+  User.hasMany(GenerationAudit, { foreignKey: 'UserId' });
+  GenerationAudit.belongsTo(User, { foreignKey: 'UserId' });
 
   Pricing.hasMany(UserPurchase, { foreignKey: 'PricingId' });
   UserPurchase.belongsTo(Pricing, { foreignKey: 'PricingId' });
@@ -40,12 +45,14 @@ export function initModels(sequelize) {
   return {
     User,
     UserImageGeneration,
+    GenerationAudit,
     Pricing,
     UserPurchase,
     TelegramPayment,
     Referral,
     Users: User,
     UserImageGenerations: UserImageGeneration,
+    GenerationAudits: GenerationAudit,
     Pricings: Pricing,
     UserPurchases: UserPurchase,
     TelegramPayments: TelegramPayment,

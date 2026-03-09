@@ -1,6 +1,7 @@
-import { createReadStream, existsSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import express from 'express';
 import { Telegraf } from 'telegraf';
 import { Sequelize, Op } from 'sequelize';
@@ -14,6 +15,7 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const envPath = join(__dirname, '..', '.env');
+const MEDIA_ROOT = join(__dirname, '..', 'media');
 
 /** Image generation models shown in /model. id is stored in Users.ActiveModel. */
 const IMAGE_MODELS = [
@@ -74,6 +76,49 @@ function getPhotoMimeType(filePath) {
   if (ext === 'gif') return 'image/gif';
   if (ext === 'webp') return 'image/webp';
   return 'image/jpeg';
+}
+
+/** Ensure media/{chatId}/{requestId}/request and .../response exist; returns full paths. */
+function ensureMediaDirs(chatId, requestId) {
+  const base = join(MEDIA_ROOT, String(chatId), requestId);
+  const requestDir = join(base, 'request');
+  const responseDir = join(base, 'response');
+  mkdirSync(requestDir, { recursive: true });
+  mkdirSync(responseDir, { recursive: true });
+  return { requestDir, responseDir };
+}
+
+function writeBufferToFile(buffer, filePath) {
+  writeFileSync(filePath, buffer);
+}
+
+/** Create audit record (status: pending). Returns audit Id. */
+async function createGenerationAudit(chatId, userId, sentPrompt, requestId, attachedImageFileNames = null) {
+  const row = await models.GenerationAudits.create({
+    UserId: userId ?? null,
+    TelegramChatId: String(chatId),
+    SentPrompt: sentPrompt || null,
+    RequestId: requestId,
+    Status: 'pending',
+    AttachedImageFileNames: attachedImageFileNames,
+  });
+  return row?.Id;
+}
+
+async function updateGenerationAuditSuccess(auditId, resultFileName) {
+  if (auditId == null) return;
+  await models.GenerationAudits.update(
+    { Status: 'success', ResultFileName: resultFileName, ErrorDetails: null },
+    { where: { Id: auditId } }
+  );
+}
+
+async function updateGenerationAuditError(auditId, errorDetails) {
+  if (auditId == null) return;
+  await models.GenerationAudits.update(
+    { Status: 'error', ErrorDetails: errorDetails || null },
+    { where: { Id: auditId } }
+  );
 }
 
 /** Start typing indicator in chat; returns stop() to clear the interval. */
@@ -729,15 +774,33 @@ function registerHandlers(bot, options = {}) {
     const stopTyping = startTyping(ctx.telegram, ctx.chat.id);
     const msg = await ctx.reply('⏳ Генерирую изображение...');
     const modelId = await getGeminiModelForUser(ctx.chat.id);
+    const requestId = randomUUID();
+    const user = await models.Users.findOne({ where: { TelegramChatId: ctx.chat.id } });
+    let auditId = null;
+    try {
+      auditId = await createGenerationAudit(ctx.chat.id, user?.Id ?? null, prompt, requestId, null);
+      ensureMediaDirs(ctx.chat.id, requestId);
+    } catch (e) {
+      console.error('Audit create:', e);
+    }
     try {
       const images = await generateImagesFromText(prompt, Math.min(needed, config.maxImagesPerRequest), modelId);
       if (images.length === 0) {
+        await updateGenerationAuditError(auditId, 'No image in response');
         await ctx.telegram.editMessageText(
           ctx.chat.id, msg.message_id, null,
           'Изображение не создано. Попробуй другой запрос.'
         );
         return;
       }
+      const { responseDir } = ensureMediaDirs(ctx.chat.id, requestId);
+      const resultNames = [];
+      for (let i = 0; i < images.length; i++) {
+        const name = images.length > 1 ? `${requestId}_result_${i + 1}.png` : `${requestId}_result.png`;
+        writeBufferToFile(images[i], join(responseDir, name));
+        resultNames.push(name);
+      }
+      await updateGenerationAuditSuccess(auditId, resultNames.join(','));
       await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id);
       for (const buffer of images) {
         await ctx.replyWithPhoto({ source: buffer, filename: 'image.png' });
@@ -746,6 +809,7 @@ function registerHandlers(bot, options = {}) {
       await recordImageGenerations(ctx.chat.id, images.length);
     } catch (err) {
       console.error('Text-to-image error:', err);
+      await updateGenerationAuditError(auditId, err?.message ?? String(err));
       const text = err?.message?.includes('SAFETY')
         ? 'Запрос заблокирован фильтрами безопасности. Попробуй другое описание.'
         : 'Что-то пошло не так. Попробуй ещё раз.';
@@ -778,20 +842,48 @@ function registerHandlers(bot, options = {}) {
     const stopTyping = startTyping(ctx.telegram, chatId);
     const msg = await ctx.reply('💫 Обрабатываю твой запрос, сейчас будет красиво...');
     const modelId = await getGeminiModelForUser(chatId);
+    const requestId = randomUUID();
+    const { requestDir, responseDir } = ensureMediaDirs(chatId, requestId);
+    const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
+    let auditId = null;
+    try {
+      auditId = await createGenerationAudit(chatId, user?.Id ?? null, caption, requestId, null);
+    } catch (e) {
+      console.error('Audit create:', e);
+    }
     try {
       const imageParts = [];
-      for (const item of items) {
-        const { buffer, filePath } = await downloadPhotoBuffer(bot, item.file_id);
+      const attachedNames = [];
+      for (let i = 0; i < items.length; i++) {
+        const { buffer, filePath } = await downloadPhotoBuffer(bot, items[i].file_id);
+        const ext = (getPhotoMimeType(filePath) === 'image/png') ? 'png' : 'jpg';
+        const name = `${requestId}_att_${i + 1}.${ext}`;
+        writeBufferToFile(buffer, join(requestDir, name));
+        attachedNames.push(name);
         imageParts.push({ buffer, mimeType: getPhotoMimeType(filePath) });
+      }
+      if (auditId != null) {
+        await models.GenerationAudits.update(
+          { AttachedImageFileNames: attachedNames.join(',') },
+          { where: { Id: auditId } }
+        );
       }
       const images = await imagesAndTextToImage(imageParts, caption, modelId);
       if (images.length === 0) {
+        await updateGenerationAuditError(auditId, 'No image in response');
         await ctx.telegram.editMessageText(
           ctx.chat.id, msg.message_id, null,
           'Изображение не создано. Попробуй другое фото или подпись.'
         );
         return;
       }
+      const resultNames = [];
+      for (let i = 0; i < images.length; i++) {
+        const name = images.length > 1 ? `${requestId}_result_${i + 1}.png` : `${requestId}_result.png`;
+        writeBufferToFile(images[i], join(responseDir, name));
+        resultNames.push(name);
+      }
+      await updateGenerationAuditSuccess(auditId, resultNames.join(','));
       await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id);
       for (const buffer of images) {
         await ctx.replyWithPhoto({ source: buffer, filename: 'image.png' });
@@ -800,6 +892,7 @@ function registerHandlers(bot, options = {}) {
       await recordImageGenerations(ctx.chat.id, images.length);
     } catch (err) {
       console.error('Image+text-to-image (group) error:', err);
+      await updateGenerationAuditError(auditId, err?.message ?? String(err));
       await ctx.telegram
         .editMessageText(ctx.chat.id, msg.message_id, null, 'Не удалось обработать изображение. Попробуй ещё раз.')
         .catch(() => {});
@@ -846,18 +939,43 @@ function registerHandlers(bot, options = {}) {
     const stopTyping = startTyping(ctx.telegram, ctx.chat.id);
     const msg = await ctx.reply('💫 Обрабатываю твой запрос, сейчас будет красиво...');
     const modelId = await getGeminiModelForUser(ctx.chat.id);
-
+    const requestId = randomUUID();
+    const { requestDir, responseDir } = ensureMediaDirs(ctx.chat.id, requestId);
+    const user = await models.Users.findOne({ where: { TelegramChatId: ctx.chat.id } });
+    let auditId = null;
+    try {
+      auditId = await createGenerationAudit(ctx.chat.id, user?.Id ?? null, caption, requestId, null);
+    } catch (e) {
+      console.error('Audit create:', e);
+    }
     try {
       const { buffer: imageBuffer, filePath } = await downloadPhotoBuffer(bot, photo.file_id);
       const mimeType = getPhotoMimeType(filePath);
+      const ext = mimeType === 'image/png' ? 'png' : 'jpg';
+      const attName = `${requestId}_att_1.${ext}`;
+      writeBufferToFile(imageBuffer, join(requestDir, attName));
+      if (auditId != null) {
+        await models.GenerationAudits.update(
+          { AttachedImageFileNames: attName },
+          { where: { Id: auditId } }
+        );
+      }
       const images = await imageAndTextToImage(imageBuffer, mimeType, caption, modelId);
       if (images.length === 0) {
+        await updateGenerationAuditError(auditId, 'No image in response');
         await ctx.telegram.editMessageText(
           ctx.chat.id, msg.message_id, null,
           'Изображение не создано. Попробуй другое фото или подпись.'
         );
         return;
       }
+      const resultNames = [];
+      for (let i = 0; i < images.length; i++) {
+        const name = images.length > 1 ? `${requestId}_result_${i + 1}.png` : `${requestId}_result.png`;
+        writeBufferToFile(images[i], join(responseDir, name));
+        resultNames.push(name);
+      }
+      await updateGenerationAuditSuccess(auditId, resultNames.join(','));
       await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id);
       for (const buffer of images) {
         await ctx.replyWithPhoto({ source: buffer, filename: 'image.png' });
@@ -866,6 +984,7 @@ function registerHandlers(bot, options = {}) {
       await recordImageGenerations(ctx.chat.id, images.length);
     } catch (err) {
       console.error('Image+text-to-image error:', err);
+      await updateGenerationAuditError(auditId, err?.message ?? String(err));
       await ctx.telegram
         .editMessageText(ctx.chat.id, msg.message_id, null, 'Не удалось обработать изображение. Попробуй ещё раз.')
         .catch(() => {});

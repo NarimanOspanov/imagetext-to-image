@@ -1,0 +1,1 @@
+# Keeps media/ in repo; user audit files (media/*/*) are created at runtime
