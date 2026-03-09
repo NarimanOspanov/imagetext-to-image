@@ -297,7 +297,7 @@ function registerHandlers(bot, options = {}) {
       const startImagePath = join(__dirname, '..', 'startimage.jpg');
       const welcomeText =
         'Привет 👋\n\n' +
-        'Я Lexy — твой AI-фотограф.\n\n' +
+        'Я Alexa — твой AI-фотограф.\n\n' +
         'Создаю реалистичные, стильные портреты, как после съёмки у топового фотографа ✨\n\n' +
         'Загрузите фото и короткое описание образа, и я покажу вашу лучшую версию.\n\n' +
         'Выбери, что хочешь сделать';
@@ -413,7 +413,7 @@ function registerHandlers(bot, options = {}) {
       });
       const totalDisplay = Math.max(totalEver, remaining, 1);
       const text =
-        '*Ваш профиль Lexy*\n\n' +
+        '*Ваш профиль Alexa*\n\n' +
         '🖼️ Генераций:\n' +
         `— Осталось ${remaining} из ${totalDisplay}\n\n` +
         `🤝 Приглашено друзей: ${invitedCount}`;
@@ -804,7 +804,7 @@ function registerHandlers(bot, options = {}) {
         ? `https://t.me/${botUsername}?start=${chatId}`
         : '(настрой BOT_USERNAME)';
     const REFERRAL_TEMPLATE =
-      'Попробуй Lexy — оживляет фото в видео 🎬✨ Мне понравилось!';
+      'Попробуй Alexa — оживляет фото в видео 🎬✨ Мне понравилось!';
     const switchQuery = `${referralLink}\n${REFERRAL_TEMPLATE}`.slice(0, 256);
     const text =
       '🤝 Приглашай друзей — получай +1 генерацию за каждого!\n\n' +
@@ -913,7 +913,7 @@ function registerHandlers(bot, options = {}) {
     'Каждая картинка стоит нам реальных денег 💸\n' +
     'Но мы сделали цену в разы ниже, чем у других —\n' +
     'чтобы ты мог творить без ограничений по оплате 🎨\n\n' +
-    '💎 Подключи Lexy Premium и получи:\n' +
+    '💎 Подключи Alexa Premium и получи:\n' +
     '• без ограничений по оплате и пробуй всё, что приходит в голову\n' +
     '• HD-качество и точность\n' +
     '• поддержку, идеи и вдохновение в любое время\n' +
