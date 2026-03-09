@@ -17,6 +17,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const envPath = join(__dirname, '..', '.env');
 const MEDIA_ROOT = join(__dirname, '..', 'media');
 
+/** Chat IDs to notify when a new user registers. */
+const ADMIN_CHAT_IDS = ['5934959951', '110043646', '473160849'];
+
 /** Image generation models shown in /model. id is stored in Users.ActiveModel. */
 const IMAGE_MODELS = [
   {
@@ -288,6 +291,21 @@ function registerHandlers(bot, options = {}) {
               // Optional: notify referrer about new referral
             }
           }
+        }
+      }
+
+      if (wasNew) {
+        try {
+          const totalUsers = await models.Users.count();
+          const displayName = username ? `@${username}` : `(id: ${chatId})`;
+          const text = `🆕 New user: ${displayName}\nTotal users: ${totalUsers}`;
+          for (const adminId of ADMIN_CHAT_IDS) {
+            await ctx.telegram.sendMessage(adminId, text).catch((e) =>
+              console.error('Admin notify error:', e)
+            );
+          }
+        } catch (err) {
+          console.error('Admin notify error:', err);
         }
       }
       } catch (err) {
