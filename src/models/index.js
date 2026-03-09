@@ -5,6 +5,10 @@ import definePricing from './Pricing.js';
 import defineUserPurchase from './UserPurchase.js';
 import defineTelegramPayment from './TelegramPayment.js';
 import defineReferral from './Referral.js';
+import definePreset from './Preset.js';
+import definePhotosetConfig from './PhotosetConfig.js';
+import definePhotoset from './Photoset.js';
+import defineUserPhotoset from './UserPhotoset.js';
 
 /**
  * Initialize code-first models and associations. Call with the shared Sequelize instance.
@@ -17,6 +21,10 @@ export function initModels(sequelize) {
   const UserPurchase = defineUserPurchase(sequelize);
   const TelegramPayment = defineTelegramPayment(sequelize);
   const Referral = defineReferral(sequelize);
+  const Preset = definePreset(sequelize);
+  const PhotosetConfig = definePhotosetConfig(sequelize);
+  const Photoset = definePhotoset(sequelize);
+  const UserPhotoset = defineUserPhotoset(sequelize);
 
   User.hasMany(UserImageGeneration, { foreignKey: 'UserId' });
   UserImageGeneration.belongsTo(User, { foreignKey: 'UserId' });
@@ -42,6 +50,19 @@ export function initModels(sequelize) {
   User.hasMany(Referral, { foreignKey: 'ReferredUserId' });
   Referral.belongsTo(User, { as: 'Referred', foreignKey: 'ReferredUserId' });
 
+  PhotosetConfig.hasMany(Photoset, { foreignKey: 'PhotosetConfigId' });
+  Photoset.belongsTo(PhotosetConfig, { foreignKey: 'PhotosetConfigId' });
+  Preset.hasMany(Photoset, { foreignKey: 'PresetId' });
+  Photoset.belongsTo(Preset, { foreignKey: 'PresetId' });
+
+  User.hasMany(UserPhotoset, { foreignKey: 'UserId' });
+  UserPhotoset.belongsTo(User, { foreignKey: 'UserId' });
+  Photoset.hasMany(UserPhotoset, { foreignKey: 'PhotosetId' });
+  UserPhotoset.belongsTo(Photoset, { foreignKey: 'PhotosetId' });
+
+  UserPhotoset.hasMany(GenerationAudit, { foreignKey: 'UserPhotosetId' });
+  GenerationAudit.belongsTo(UserPhotoset, { foreignKey: 'UserPhotosetId' });
+
   return {
     User,
     UserImageGeneration,
@@ -50,6 +71,10 @@ export function initModels(sequelize) {
     UserPurchase,
     TelegramPayment,
     Referral,
+    Preset,
+    PhotosetConfig,
+    Photoset,
+    UserPhotoset,
     Users: User,
     UserImageGenerations: UserImageGeneration,
     GenerationAudits: GenerationAudit,
@@ -57,5 +82,9 @@ export function initModels(sequelize) {
     UserPurchases: UserPurchase,
     TelegramPayments: TelegramPayment,
     Referrals: Referral,
+    Presets: Preset,
+    PhotosetConfigs: PhotosetConfig,
+    Photosets: Photoset,
+    UserPhotosets: UserPhotoset,
   };
 }

@@ -93,7 +93,14 @@ function writeBufferToFile(buffer, filePath) {
 }
 
 /** Create audit record (status: pending). Returns audit Id. */
-async function createGenerationAudit(chatId, userId, sentPrompt, requestId, attachedImageFileNames = null) {
+async function createGenerationAudit(
+  chatId,
+  userId,
+  sentPrompt,
+  requestId,
+  attachedImageFileNames = null,
+  userPhotosetId = null
+) {
   const row = await models.GenerationAudits.create({
     UserId: userId ?? null,
     TelegramChatId: String(chatId),
@@ -101,6 +108,7 @@ async function createGenerationAudit(chatId, userId, sentPrompt, requestId, atta
     RequestId: requestId,
     Status: 'pending',
     AttachedImageFileNames: attachedImageFileNames,
+    UserPhotosetId: userPhotosetId ?? null,
   });
   return row?.Id;
 }
@@ -502,6 +510,124 @@ function registerHandlers(bot, options = {}) {
     }
   });
 
+  // —— Photosets: show presets-based photoshoot ideas and create photoset ——
+  const pendingPhotosets = new Map(); // chatId -> { configId }
+
+  async function sendPhotosetCard(ctx, configId = null) {
+    const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
+    try {
+      const configs = await models.PhotosetConfigs.findAll({
+        order: [['Id', 'ASC']],
+      });
+      if (!configs || configs.length === 0) {
+        return ctx.reply('Фотосеты скоро появятся — мы готовим для тебя лучшие подборки.');
+      }
+      let index = 0;
+      if (configId != null) {
+        const foundIndex = configs.findIndex((c) => c.Id === configId);
+        if (foundIndex >= 0) index = foundIndex;
+      }
+      const current = configs[index];
+      const hasPrev = index > 0;
+      const hasNext = index < configs.length - 1;
+      const coverPath = join(__dirname, '..', 'PhotosetCovers', current.Image);
+      const caption = `${current.Name}\n\n${current.Description}`;
+      const keyboard = [];
+      const navRow = [];
+      if (hasPrev) {
+        navRow.push({
+          text: '⬅️',
+          callback_data: `photoset_prev_${current.Id}`,
+        });
+      }
+      if (hasNext) {
+        navRow.push({
+          text: '➡️',
+          callback_data: `photoset_next_${current.Id}`,
+        });
+      }
+      if (navRow.length > 0) {
+        keyboard.push(navRow);
+      }
+      keyboard.push([
+        {
+          text: 'Создать фотосессию',
+          callback_data: `photoset_create_${current.Id}`,
+        },
+      ]);
+      if (existsSync(coverPath)) {
+        await ctx.replyWithPhoto(
+          { source: createReadStream(coverPath) },
+          {
+            caption,
+            reply_markup: { inline_keyboard: keyboard },
+          }
+        );
+      } else {
+        await ctx.reply(caption, {
+          reply_markup: { inline_keyboard: keyboard },
+        });
+      }
+    } finally {
+      stopTyping();
+    }
+  }
+
+  bot.command('photosets', async (ctx) => {
+    await sendPhotosetCard(ctx, null);
+  });
+
+  bot.action(/^photoset_(prev|next)_(\d+)$/, async (ctx) => {
+    const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
+    try {
+      const direction = ctx.match[1];
+      const currentId = parseInt(ctx.match[2], 10);
+      if (ctx.callbackQuery) await ctx.answerCbQuery();
+      const configs = await models.PhotosetConfigs.findAll({
+        order: [['Id', 'ASC']],
+      });
+      if (!configs || configs.length === 0) {
+        return ctx.reply('Фотосеты скоро появятся — мы готовим для тебя лучшие подборки.');
+      }
+      const index = configs.findIndex((c) => c.Id === currentId);
+      if (index === -1) {
+        return sendPhotosetCard(ctx, null);
+      }
+      const nextIndex = direction === 'prev' ? Math.max(0, index - 1) : Math.min(configs.length - 1, index + 1);
+      const target = configs[nextIndex];
+      await sendPhotosetCard(ctx, target.Id);
+    } finally {
+      stopTyping();
+    }
+  });
+
+  bot.action(/^photoset_create_(\d+)$/, async (ctx) => {
+    const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
+    try {
+      if (ctx.callbackQuery) await ctx.answerCbQuery();
+      const configId = parseInt(ctx.match[1], 10);
+      const chatId = ctx.chat?.id;
+      const configRow = await models.PhotosetConfigs.findByPk(configId);
+      if (!configRow) {
+        return ctx.reply('Этот фотосет больше недоступен. Попробуй выбрать другой.');
+      }
+
+      const photosetsCount = await models.Photosets.count({
+        where: { PhotosetConfigId: configId },
+      });
+      if (photosetsCount === 0) {
+        return ctx.reply('Для этого фотосета ещё не настроены промпты. Скоро добавим.');
+      }
+
+      pendingPhotosets.set(chatId, { configId });
+      await ctx.reply(
+        'Отправь одну или несколько исходных фото людей одним сообщением. Я использую их как основу для этого фотосета.'
+      );
+    } finally {
+      stopTyping();
+    }
+  });
+
   // —— Pay: show payment method options ——
   bot.command('pay', async (ctx) => {
     const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
@@ -831,6 +957,125 @@ function registerHandlers(bot, options = {}) {
     }
   });
 
+  // Photoset generation helper: reuse uploaded images as references for all prompts in the set
+  async function runPhotosetGeneration(ctx, imageParts, configId) {
+    const chatId = ctx.chat.id;
+
+    const photosets = await models.Photosets.findAll({
+      where: { PhotosetConfigId: configId },
+      include: [{ model: models.Presets }],
+      order: [['Id', 'ASC']],
+    });
+    const prompts = photosets
+      .map((p) => p.Preset?.Prompt)
+      .filter((p) => typeof p === 'string' && p.trim().length > 0);
+
+    if (prompts.length === 0) {
+      await ctx.reply('Для этого фотосета ещё не настроены промпты. Скоро добавим.');
+      return;
+    }
+
+    const { total } = await getAvailableGenerations(chatId);
+    const needed = prompts.length;
+    if (total < needed) {
+      await ctx.reply(noGenerationsMessage, noGenerationsReplyMarkup);
+      return;
+    }
+
+    const stopTyping = startTyping(ctx.telegram, chatId);
+    const processingMsg = await ctx.reply('📸 Создаю фотосессию по выбранному стилю...');
+
+    try {
+      const modelId = await getGeminiModelForUser(chatId);
+      let user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
+      if (!user) {
+        try {
+          user = await models.Users.create({
+            TelegramChatId: chatId,
+            TelegramUserName: ctx.from?.username ?? null,
+            DateJoined: Sequelize.literal('GETUTCDATE()'),
+          });
+        } catch (e) {
+          if (e?.name === 'SequelizeUniqueConstraintError') {
+            user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
+          } else {
+            throw e;
+          }
+        }
+      }
+
+      let generatedCount = 0;
+
+      for (const row of photosets) {
+        const prompt = row.Preset?.Prompt;
+        if (!prompt) continue;
+
+        const requestId = randomUUID();
+        const { requestDir, responseDir } = ensureMediaDirs(chatId, requestId);
+
+        const attachedNames = [];
+        for (let i = 0; i < imageParts.length; i++) {
+          const part = imageParts[i];
+          const ext = part.mimeType === 'image/png' ? 'png' : 'jpg';
+          const name = `${requestId}_att_${i + 1}.${ext}`;
+          writeBufferToFile(part.buffer, join(requestDir, name));
+          attachedNames.push(name);
+        }
+
+        const userPhotoset = await models.UserPhotosets.create({
+          UserId: user.Id,
+          PhotosetId: row.Id,
+          DateTimeUtc: new Date(),
+          NumberOfPicturesInPhotoset: 1,
+        });
+
+        let auditId = null;
+        try {
+          auditId = await createGenerationAudit(
+            chatId,
+            user.Id,
+            prompt,
+            requestId,
+            attachedNames.join(','),
+            userPhotoset.Id
+          );
+        } catch (e) {
+          console.error('Audit create for photoset:', e);
+        }
+
+        try {
+          const images = await imagesAndTextToImage(imageParts, prompt, modelId);
+          if (!images || images.length === 0) {
+            await updateGenerationAuditError(auditId, 'No image in response (photoset)');
+            continue;
+          }
+          const fileName = `${requestId}_result.png`;
+          writeBufferToFile(images[0], join(responseDir, fileName));
+          await updateGenerationAuditSuccess(auditId, fileName);
+          await ctx.replyWithPhoto({ source: images[0], filename: 'image.png' });
+          generatedCount += 1;
+        } catch (err) {
+          console.error('Photoset generation error:', err);
+          await updateGenerationAuditError(auditId, err?.message ?? String(err));
+        }
+      }
+
+      if (generatedCount > 0) {
+        await consumeGenerations(chatId, generatedCount);
+        await recordImageGenerations(chatId, generatedCount);
+        await ctx.telegram.deleteMessage(chatId, processingMsg.message_id).catch(() => {});
+        await ctx.reply('Готово! Вот твой фотосет.');
+      } else {
+        await ctx.telegram.deleteMessage(chatId, processingMsg.message_id).catch(() => {});
+        await ctx.reply(
+          'Не удалось создать фотосессию. Попробуй ещё раз позже или выбери другой стиль.'
+        );
+      }
+    } finally {
+      stopTyping();
+    }
+  }
+
   // Media group buffer: when user sends album, Telegram sends one update per photo with same media_group_id
   const MEDIA_GROUP_DELAY_MS = 1200;
   const MAX_PHOTOS_IN_GROUP = 10;
@@ -845,6 +1090,21 @@ function registerHandlers(bot, options = {}) {
     if (items.length === 0) return;
 
     const chatId = ctx.chat.id;
+
+    // If user has a pending photoset selection, use these images as input for that photoset
+    const pending = pendingPhotosets.get(chatId);
+    if (pending) {
+      pendingPhotosets.delete(chatId);
+      const imageParts = [];
+      for (let i = 0; i < items.length; i++) {
+        const { buffer, filePath } = await downloadPhotoBuffer(bot, items[i].file_id);
+        const mimeType = getPhotoMimeType(filePath);
+        imageParts.push({ buffer, mimeType });
+      }
+      await runPhotosetGeneration(ctx, imageParts, pending.configId);
+      return;
+    }
+
     const { total } = await getAvailableGenerations(chatId);
     if (total < 1) {
       await ctx.reply(noGenerationsMessage, noGenerationsReplyMarkup);
@@ -943,6 +1203,15 @@ function registerHandlers(bot, options = {}) {
     }
 
     // Single photo (no album)
+    const pending = pendingPhotosets.get(ctx.chat.id);
+    if (pending) {
+      pendingPhotosets.delete(ctx.chat.id);
+      const { buffer: imageBuffer, filePath } = await downloadPhotoBuffer(bot, photo.file_id);
+      const mimeType = getPhotoMimeType(filePath);
+      await runPhotosetGeneration(ctx, [{ buffer: imageBuffer, mimeType }], pending.configId);
+      return;
+    }
+
     const { total } = await getAvailableGenerations(ctx.chat.id);
     if (total < 1) {
       return ctx.reply(noGenerationsMessage, noGenerationsReplyMarkup);
@@ -1060,6 +1329,7 @@ async function main() {
     { command: 'model', description: '✨ Сменить модель' },
     { command: 'pay', description: '💎 Докупить генерации' },
     { command: 'referrals', description: '🎁 Бонусы за друзей' },
+    { command: 'photosets', description: '📸 Готовые фотосеты' },
     { command: 'help', description: '❓ Помощь' },
   ];
   try {

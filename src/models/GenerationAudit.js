@@ -48,6 +48,11 @@ export default function defineGenerationAudit(sequelize) {
         type: DataTypes.STRING(500),
         allowNull: true,
       },
+      UserPhotosetId: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        references: { model: 'UserPhotosets', key: 'Id' },
+      },
       CreatedAt: {
         type: DataTypes.DATE,
         allowNull: false,
@@ -64,6 +69,7 @@ export default function defineGenerationAudit(sequelize) {
         { fields: ['RequestId'] },
         { fields: ['Status'] },
         { fields: ['CreatedAt'] },
+        { fields: ['UserPhotosetId'] },
       ],
     }
   );
