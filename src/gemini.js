@@ -48,20 +48,31 @@ export async function generateImagesFromText(prompt, count = 1, modelId = null) 
  * @param {string} [modelId] - optional Gemini model id; defaults to config.geminiImageModel
  */
 export async function imageAndTextToImage(imageBuffer, mimeType, userPrompt = '', modelId = null) {
-  const base64 = imageBuffer.toString('base64');
-  const text =
-    userPrompt.trim() ||
-    'Generate a new image based on this image (same subject and style, new variation).';
+  return imagesAndTextToImage([{ buffer: imageBuffer, mimeType: mimeType || 'image/png' }], userPrompt, modelId);
+}
 
-  const contents = [
-    { text },
-    {
-      inlineData: {
-        mimeType: mimeType || 'image/png',
-        data: base64,
-      },
-    },
-  ];
+/**
+ * Multiple photos + prompt → one generated image. Single request with all images.
+ * @param {{ buffer: Buffer, mimeType: string }[]} imageParts - one or more images
+ * @param {string} [userPrompt]
+ * @param {string} [modelId]
+ */
+export async function imagesAndTextToImage(imageParts, userPrompt = '', modelId = null) {
+  const text =
+    (userPrompt && userPrompt.trim()) ||
+    'Generate a new image based on these images (same subject and style, new variation).';
+
+  const contents = [{ text }];
+  for (const part of imageParts) {
+    if (part?.buffer) {
+      contents.push({
+        inlineData: {
+          mimeType: part.mimeType || 'image/png',
+          data: part.buffer.toString('base64'),
+        },
+      });
+    }
+  }
 
   const model = modelId || config.geminiImageModel;
   const response = await ai.models.generateContent({

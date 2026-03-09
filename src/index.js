@@ -9,6 +9,7 @@ import { sequelize, models } from './db.js';
 import {
   generateImagesFromText,
   imageAndTextToImage,
+  imagesAndTextToImage,
 } from './gemini.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -697,6 +698,23 @@ function registerHandlers(bot, options = {}) {
     );
   });
 
+  const noGenerationsMessage =
+    '⛔️ Ты использовал все бесплатные генерации\n\n' +
+    'Каждая картинка стоит нам реальных денег 💸\n' +
+    'Но мы сделали цену в разы ниже, чем у других —\n' +
+    'чтобы ты мог творить без ограничений по оплате 🎨\n\n' +
+    '💎 Подключи Lexy Premium и получи:\n' +
+    '• без ограничений по оплате и пробуй всё, что приходит в голову\n' +
+    '• HD-качество и точность\n' +
+    '• поддержку, идеи и вдохновение в любое время\n' +
+    '• PRO-режим\n\n' +
+    'и всё это — дешевле чашки кофе ☕️';
+  const noGenerationsReplyMarkup = {
+    reply_markup: {
+      inline_keyboard: [[{ text: 'Докупить генерации 🏆', callback_data: 'pay_menu' }]],
+    },
+  };
+
   // Text message → text-to-image
   bot.on('text', async (ctx) => {
     const prompt = ctx.message.text.trim();
@@ -705,9 +723,7 @@ function registerHandlers(bot, options = {}) {
     const needed = config.maxImagesPerRequest;
     const { total } = await getAvailableGenerations(ctx.chat.id);
     if (total < needed) {
-      return ctx.reply(
-        `Недостаточно генераций. Доступно: ${total}. Докупить: /pay или пригласи друзей: нажми Меню → Докупить генерации → Пригласить друзей.`
-      );
+      return ctx.reply(noGenerationsMessage, noGenerationsReplyMarkup);
     }
 
     const stopTyping = startTyping(ctx.telegram, ctx.chat.id);
@@ -739,20 +755,96 @@ function registerHandlers(bot, options = {}) {
     }
   });
 
-  // Photo (with optional caption) → image + text to image
+  // Media group buffer: when user sends album, Telegram sends one update per photo with same media_group_id
+  const MEDIA_GROUP_DELAY_MS = 1200;
+  const MAX_PHOTOS_IN_GROUP = 10;
+  const mediaGroupBuffers = new Map();
+
+  async function processMediaGroup(mediaGroupId) {
+    const buf = mediaGroupBuffers.get(mediaGroupId);
+    if (!buf) return;
+    mediaGroupBuffers.delete(mediaGroupId);
+    if (buf.timeoutId) clearTimeout(buf.timeoutId);
+    const { items, caption, ctx } = buf;
+    if (items.length === 0) return;
+
+    const chatId = ctx.chat.id;
+    const { total } = await getAvailableGenerations(chatId);
+    if (total < 1) {
+      await ctx.reply(noGenerationsMessage, noGenerationsReplyMarkup);
+      return;
+    }
+
+    const stopTyping = startTyping(ctx.telegram, chatId);
+    const msg = await ctx.reply('💫 Обрабатываю твой запрос, сейчас будет красиво...');
+    const modelId = await getGeminiModelForUser(chatId);
+    try {
+      const imageParts = [];
+      for (const item of items) {
+        const { buffer, filePath } = await downloadPhotoBuffer(bot, item.file_id);
+        imageParts.push({ buffer, mimeType: getPhotoMimeType(filePath) });
+      }
+      const images = await imagesAndTextToImage(imageParts, caption, modelId);
+      if (images.length === 0) {
+        await ctx.telegram.editMessageText(
+          ctx.chat.id, msg.message_id, null,
+          'Изображение не создано. Попробуй другое фото или подпись.'
+        );
+        return;
+      }
+      await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id);
+      for (const buffer of images) {
+        await ctx.replyWithPhoto({ source: buffer, filename: 'image.png' });
+      }
+      await consumeGenerations(ctx.chat.id, images.length);
+      await recordImageGenerations(ctx.chat.id, images.length);
+    } catch (err) {
+      console.error('Image+text-to-image (group) error:', err);
+      await ctx.telegram
+        .editMessageText(ctx.chat.id, msg.message_id, null, 'Не удалось обработать изображение. Попробуй ещё раз.')
+        .catch(() => {});
+    } finally {
+      stopTyping();
+    }
+  }
+
+  // Photo (with optional caption) → image + text to image. Multiple photos in album = one request.
   bot.on('photo', async (ctx) => {
     const caption = (ctx.message.caption || '').trim();
     const photo = ctx.message.photo.slice(-1)[0];
-    const needed = config.maxImagesPerRequest;
+    const mediaGroupId = ctx.message.media_group_id;
+
+    if (mediaGroupId) {
+      if (!mediaGroupBuffers.has(mediaGroupId)) {
+        mediaGroupBuffers.set(mediaGroupId, {
+          items: [],
+          caption: '',
+          timeoutId: null,
+          ctx,
+        });
+      }
+      const buf = mediaGroupBuffers.get(mediaGroupId);
+      buf.items.push({ file_id: photo.file_id });
+      if (caption) buf.caption = caption;
+      if (buf.items.length > MAX_PHOTOS_IN_GROUP) {
+        if (buf.timeoutId) clearTimeout(buf.timeoutId);
+        mediaGroupBuffers.delete(mediaGroupId);
+        await ctx.reply(`Отправь не более ${MAX_PHOTOS_IN_GROUP} фото в одном альбоме.`);
+        return;
+      }
+      if (buf.timeoutId) clearTimeout(buf.timeoutId);
+      buf.timeoutId = setTimeout(() => processMediaGroup(mediaGroupId), MEDIA_GROUP_DELAY_MS);
+      return;
+    }
+
+    // Single photo (no album)
     const { total } = await getAvailableGenerations(ctx.chat.id);
     if (total < 1) {
-      return ctx.reply(
-        'Недостаточно генераций. Докупить: /pay или пригласи друзей (Меню → Докупить генерации → Пригласить друзей).'
-      );
+      return ctx.reply(noGenerationsMessage, noGenerationsReplyMarkup);
     }
 
     const stopTyping = startTyping(ctx.telegram, ctx.chat.id);
-    const msg = await ctx.reply('⏳ Обрабатываю фото и генерирую новое изображение...');
+    const msg = await ctx.reply('💫 Обрабатываю твой запрос, сейчас будет красиво...');
     const modelId = await getGeminiModelForUser(ctx.chat.id);
 
     try {
