@@ -159,11 +159,14 @@ async function getGeminiModelForUser(chatId) {
   return resolveGeminiModelId(active);
 }
 
-/** Total generations available: referral bonuses (unused) + purchase balance. */
+const INITIAL_FREE_GENERATIONS = 3;
+
+/** Total generations available: free (new user) + referral bonuses (unused) + purchase balance. */
 async function getAvailableGenerations(chatId) {
   try {
     const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
-    if (!user) return { total: 0, fromReferrals: 0, fromPurchases: 0 };
+    if (!user) return { total: 0, fromFree: 0, fromReferrals: 0, fromPurchases: 0, totalEver: 0 };
+    const fromFree = Math.max(0, user.FreeGenerationsRemaining ?? 0);
     const fromReferrals = await models.Referrals.count({
       where: { ReferrerUserId: user.Id, BonusUsed: false },
     });
@@ -174,25 +177,34 @@ async function getAvailableGenerations(chatId) {
     });
     const fromPurchases = purchases.reduce((s, p) => s + (p.BalanceRemaining || 0), 0);
     const totalEver =
+      INITIAL_FREE_GENERATIONS +
       (await models.Referrals.count({ where: { ReferrerUserId: user.Id } })) +
       purchases.reduce((s, p) => s + (p.GenerationsIncluded || 0), 0);
     return {
-      total: fromReferrals + fromPurchases,
+      total: fromFree + fromReferrals + fromPurchases,
+      fromFree,
       fromReferrals,
       fromPurchases,
       totalEver,
     };
   } catch (err) {
     console.error('DB getAvailableGenerations:', err);
-    return { total: 0, fromReferrals: 0, fromPurchases: 0, totalEver: 0 };
+    return { total: 0, fromFree: 0, fromReferrals: 0, fromPurchases: 0, totalEver: 0 };
   }
 }
 
-/** Consume up to `count` generations: referral bonuses first, then purchase balance. */
+/** Consume up to `count` generations: free first, then referral bonuses, then purchase balance. */
 async function consumeGenerations(chatId, count) {
   const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
   if (!user || count < 1) return false;
   let left = count;
+  const freeRemaining = Math.max(0, user.FreeGenerationsRemaining ?? 0);
+  if (freeRemaining > 0 && left > 0) {
+    const use = Math.min(left, freeRemaining);
+    await user.update({ FreeGenerationsRemaining: freeRemaining - use });
+    left -= use;
+  }
+  if (left <= 0) return true;
   const referralRows = await models.Referrals.findAll({
     where: { ReferrerUserId: user.Id, BonusUsed: false },
     order: [['Id', 'ASC']],

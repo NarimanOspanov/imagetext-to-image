@@ -47,6 +47,11 @@ export default function defineUser(sequelize) {
         type: DataTypes.STRING(50),
         allowNull: true,
       },
+      FreeGenerationsRemaining: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        defaultValue: 3,
+      },
     },
     {
       tableName: 'Users',
