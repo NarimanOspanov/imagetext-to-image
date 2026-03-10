@@ -49,16 +49,19 @@
 
     /* ── Cards ───────────────────────────────────────────── */
     .card { background: var(--bg); border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 12px; overflow: hidden; }
-    .card-header { display: flex; align-items: center; gap: 12px; padding: 14px; }
-    .card-thumb { width: 56px; height: 56px; border-radius: var(--radius-sm); object-fit: cover; flex-shrink: 0; background: var(--bg2); }
-    .card-thumb-placeholder { width: 56px; height: 56px; border-radius: var(--radius-sm); flex-shrink: 0; background: var(--bg2); display: flex; align-items: center; justify-content: center; font-size: 24px; }
+    .card-cover { width: 100%; height: 190px; object-fit: cover; display: block; }
+    .card-cover-placeholder { width: 100%; height: 110px; background: var(--bg2); display: flex; align-items: center; justify-content: center; font-size: 48px; }
+    .card-header { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px 8px; }
     .card-info { flex: 1; min-width: 0; }
-    .card-title { font-size: 15px; font-weight: 600; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .card-title { font-size: 15px; font-weight: 600; margin-bottom: 3px; }
     .card-desc { font-size: 13px; color: var(--hint); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-    .card-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .card-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; padding-top: 2px; }
     .btn-icon { width: 36px; height: 36px; border-radius: 50%; border: none; background: var(--bg2); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; transition: opacity var(--transition); }
     .btn-icon:active { opacity: .6; }
     .btn-icon.danger { background: rgba(255,59,48,.12); }
+    .deep-link-bar { margin: 0 14px 10px; background: var(--bg2); border-radius: var(--radius-sm); padding: 8px 10px; display: flex; align-items: center; gap: 8px; }
+    .deep-link-text { flex: 1; font-size: 12px; color: var(--hint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; }
+    .btn-copy { flex-shrink: 0; padding: 5px 12px; background: var(--accent); color: var(--accent-t); border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 
     .card-body { padding: 0 14px 14px; }
     .card-section-title { font-size: 12px; font-weight: 600; color: var(--hint); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
@@ -223,7 +226,7 @@
   // ── State ─────────────────────────────────────────────────────────────────
   let configs = [];
   let presets = [];
-  let blobBaseUrl = null;
+  let botUsername = '';
   let activeTab = 'photosets';
   let linkingConfigId = null;
   let psImageBase64 = null;
@@ -248,14 +251,14 @@
   }
 
   async function loadAll() {
-    const [cfgs, prs, sc] = await Promise.all([
+    const [cfgs, prs, bi] = await Promise.all([
       api('GET', '/configs'),
       api('GET', '/presets'),
-      api('GET', '/storage-config').catch(() => ({ blobBaseUrl: null })),
+      fetch('/api/admin/bot-info').then(r => r.json()).catch(() => ({ botUsername: '' })),
     ]);
     configs = cfgs;
     presets = prs;
-    blobBaseUrl = sc.blobBaseUrl;
+    botUsername = bi.botUsername || '';
   }
 
   // ── Toast ─────────────────────────────────────────────────────────────────
@@ -343,10 +346,16 @@
     btn.innerHTML = '<span class="spinner"></span>';
     try {
       const row = await api('POST', '/configs', { name, description, imageBase64: psImageBase64, imageFileName: psImageFileName });
-      configs.push(row);
+      configs.unshift(row);
       closeSheet('sheet-photoset');
       render();
-      showToast('Фотосет создан ✓', 'success');
+      const link = deepLink(row.Id);
+      if (link) {
+        showToast('Фотосет создан ✓  —  ссылка скопирована!', 'success');
+        copyText(link);
+      } else {
+        showToast('Фотосет создан ✓', 'success');
+      }
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -368,7 +377,7 @@
     btn.innerHTML = '<span class="spinner"></span>';
     try {
       const row = await api('POST', '/presets', { prompt });
-      presets.push(row);
+      presets.unshift(row);
       closeSheet('sheet-preset');
       render();
       showToast('Промпт создан ✓', 'success');
@@ -459,14 +468,41 @@
     }
   }
 
+  // ── Deep link helpers ─────────────────────────────────────────────────────
+  function deepLink(configId) {
+    if (!botUsername) return null;
+    return `https://t.me/${botUsername}?start=photoset_${configId}`;
+  }
+
+  function copyText(text) {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+  }
+
+  function copyDeepLink(configId) {
+    const link = deepLink(configId);
+    if (!link) { showToast('Имя бота ещё не загружено', 'error'); return; }
+    copyText(link);
+    showToast('Ссылка скопирована ✓', 'success');
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
   function esc(str) {
     return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
-  function thumbUrl(fileName) {
-    if (!blobBaseUrl || !fileName) return null;
-    return `${blobBaseUrl}/PhotosetCovers/${fileName}`;
+  // Always route cover images through the server proxy — no cross-origin or
+  // public-access issues, works even if the blob container is private.
+  function coverUrl(fileName) {
+    if (!fileName) return null;
+    return `/api/admin/cover/${encodeURIComponent(fileName)}`;
   }
 
   function renderPhotosets() {
@@ -474,10 +510,13 @@
       return `<div class="empty"><div class="empty-icon">📸</div><div class="empty-text">Нет фотосетов. Нажмите + чтобы создать.</div></div>`;
     }
     return configs.map(cfg => {
-      const thumb = thumbUrl(cfg.Image);
-      const thumbHtml = thumb
-        ? `<img class="card-thumb" src="${esc(thumb)}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" /><div class="card-thumb-placeholder" style="display:none">📸</div>`
-        : `<div class="card-thumb-placeholder">📸</div>`;
+      const cover = coverUrl(cfg.Image);
+      const coverHtml = cover
+        ? `<img class="card-cover" src="${esc(cover)}" alt="${esc(cfg.Name)}"
+              onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" />
+           <div class="card-cover-placeholder" style="display:none">📸</div>`
+        : `<div class="card-cover-placeholder">📸</div>`;
+      const link = deepLink(cfg.Id);
       const linkedPresets = cfg.Photosets || [];
       const presetsHtml = linkedPresets.map(ps => `
         <div class="preset-chip">
@@ -487,16 +526,22 @@
       `).join('');
       return `
         <div class="card">
+          ${coverHtml}
           <div class="card-header">
-            ${thumbHtml}
             <div class="card-info">
               <div class="card-title">${esc(cfg.Name)}</div>
               <div class="card-desc">${esc(cfg.Description)}</div>
             </div>
             <div class="card-actions">
+              <button class="btn-icon" title="Копировать ссылку" onclick="copyDeepLink(${cfg.Id})">🔗</button>
               <button class="btn-icon danger" title="Удалить" onclick="deleteConfig(${cfg.Id})">🗑</button>
             </div>
           </div>
+          ${link ? `
+          <div class="deep-link-bar">
+            <span class="deep-link-text">${esc(link)}</span>
+            <button class="btn-copy" onclick="copyDeepLink(${cfg.Id})">Копировать</button>
+          </div>` : ''}
           <div class="card-body">
             <div class="card-section-title">Промпты (${linkedPresets.length})</div>
             ${presetsHtml}

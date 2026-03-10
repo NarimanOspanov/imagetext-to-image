@@ -80,6 +80,31 @@ router.get('/storage-config', adminAuth, (_req, res) => {
   });
 });
 
+// ── Cover image proxy ─────────────────────────────────────────────────────────
+// Proxies photoset cover images from Azure Blob through the server so the
+// admin panel never has to deal with cross-origin or public-access issues.
+router.get('/cover/:fileName', adminAuth, async (req, res) => {
+  try {
+    const connStr = config.azureStorageConnectionString;
+    if (!connStr) return res.status(503).send('Storage not configured');
+    const { BlobServiceClient } = await import('@azure/storage-blob');
+    const client = BlobServiceClient.fromConnectionString(connStr);
+    const container = client.getContainerClient(config.azureStorageContainer);
+    const fileName = req.params.fileName;
+    const blobName = fileName.startsWith('PhotosetCovers/')
+      ? fileName
+      : `PhotosetCovers/${fileName}`;
+    const blob = container.getBlockBlobClient(blobName);
+    const download = await blob.download(0);
+    res.set('Content-Type', download.contentType || 'image/jpeg');
+    res.set('Cache-Control', 'public, max-age=86400');
+    download.readableStreamBody.pipe(res);
+  } catch (err) {
+    console.error('Cover proxy error:', err?.message);
+    res.status(404).send('Not found');
+  }
+});
+
 // ── PhotosetConfigs ───────────────────────────────────────────────────────────
 router.get('/configs', adminAuth, async (_req, res) => {
   try {

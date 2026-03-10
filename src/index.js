@@ -19,6 +19,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const envPath = join(__dirname, '..', '.env');
 const MEDIA_ROOT = join(__dirname, '..', 'media');
 
+/** Set after bot.telegram.getMe() resolves; used by the admin API. */
+let runtimeBotUsername = '';
+
 /** Chat IDs to notify when a new user registers. */
 const ADMIN_CHAT_IDS = ['5934959951', '110043646', '473160849'];
 
@@ -332,6 +335,15 @@ function registerHandlers(bot, options = {}) {
       }
       } catch (err) {
         console.error('DB error in /start:', err);
+      }
+
+      // Deep link: /start photoset_<configId> → show that photoset directly
+      if (startPayload.startsWith('photoset_')) {
+        const photosetConfigId = parseInt(startPayload.slice('photoset_'.length), 10);
+        if (!isNaN(photosetConfigId)) {
+          stopTyping();
+          return sendPhotosetCard(ctx, photosetConfigId);
+        }
       }
 
       const startImagePath = join(__dirname, '..', 'startimage.jpg');
@@ -1370,6 +1382,7 @@ async function main() {
 
   // Admin Mini App
   app.use('/api/admin', express.json({ limit: '20mb' }), adminRouter);
+  app.get('/api/admin/bot-info', (_req, res) => res.json({ botUsername: runtimeBotUsername }));
   app.use('/admin', express.static(join(__dirname, '..', 'public', 'admin')));
 
   await new Promise((resolve) => app.listen(port, resolve));
@@ -1397,6 +1410,7 @@ async function main() {
       ),
     ]);
     botUsername = me?.username || process.env.BOT_USERNAME || '';
+    runtimeBotUsername = botUsername;
     console.log('Telegram OK.', botUsername ? `@${botUsername}` : '(username not set)');
   } catch (err) {
     console.error('Cannot reach Telegram:', err.message);
