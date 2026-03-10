@@ -14,6 +14,10 @@ export default function definePreset(sequelize) {
         type: DataTypes.TEXT,
         allowNull: false,
       },
+      Image: {
+        type: DataTypes.STRING(255),
+        allowNull: true,
+      },
     },
     {
       tableName: 'Presets',

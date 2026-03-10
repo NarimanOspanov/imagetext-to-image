@@ -346,6 +346,15 @@ function registerHandlers(bot, options = {}) {
         }
       }
 
+      // Deep link: /start preset_<presetId> → ask user to upload a photo for that preset
+      if (startPayload.startsWith('preset_')) {
+        const presetId = parseInt(startPayload.slice('preset_'.length), 10);
+        if (!isNaN(presetId)) {
+          stopTyping();
+          return sendPresetCard(ctx, presetId);
+        }
+      }
+
       const startImagePath = join(__dirname, '..', 'startimage.jpg');
       const welcomeText =
         'Привет 👋\n\n' +
@@ -576,6 +585,7 @@ function registerHandlers(bot, options = {}) {
 
   // —— Photosets: show presets-based photoshoot ideas and create photoset ——
   const pendingPhotosets = new Map(); // chatId -> { configId }
+  const pendingPresets = new Map();   // chatId -> { presetId }
 
   function buildPhotosetKeyboard(configs, index) {
     const count = configs.length;
@@ -644,6 +654,107 @@ function registerHandlers(bot, options = {}) {
           reply_markup: { inline_keyboard: keyboard },
         });
       }
+    }
+  }
+
+  async function sendPresetCard(ctx, presetId) {
+    const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
+    try {
+      const preset = await models.Presets.findByPk(presetId);
+      if (!preset) {
+        return ctx.reply('Этот пресет недоступен. Попробуй другой.');
+      }
+      const chatId = ctx.chat.id;
+      pendingPresets.set(chatId, { presetId });
+      const text = 'Отправь фото — я создам изображение в выбранном стиле.';
+      const imageBuffer = preset.Image
+        ? await downloadBlobBuffer(`PresetImages/${preset.Image}`)
+        : null;
+      if (imageBuffer) {
+        await ctx.replyWithPhoto(
+          { source: imageBuffer, filename: preset.Image },
+          { caption: text }
+        );
+      } else {
+        await ctx.reply(text);
+      }
+    } finally {
+      stopTyping();
+    }
+  }
+
+  async function runPresetGeneration(ctx, imageParts, presetId) {
+    const chatId = ctx.chat.id;
+    const preset = await models.Presets.findByPk(presetId);
+    if (!preset) {
+      await ctx.reply('Этот пресет больше недоступен.');
+      return;
+    }
+    const prompt = preset.Prompt;
+    const { total } = await getAvailableGenerations(chatId);
+    if (total < 1) {
+      await ctx.reply(noGenerationsMessage, noGenerationsReplyMarkup);
+      return;
+    }
+    const stopTyping = startTyping(ctx.telegram, chatId);
+    const processingMsg = await ctx.reply('📸 Создаю изображение по выбранному стилю...');
+    try {
+      const modelId = await getGeminiModelForUser(chatId);
+      let user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
+      if (!user) {
+        try {
+          user = await models.Users.create({
+            TelegramChatId: chatId,
+            TelegramUserName: ctx.from?.username ?? null,
+            DateJoined: Sequelize.literal('GETUTCDATE()'),
+          });
+        } catch (e) {
+          if (e?.name === 'SequelizeUniqueConstraintError') {
+            user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
+          } else {
+            throw e;
+          }
+        }
+      }
+      const requestId = randomUUID();
+      const { requestDir, responseDir } = ensureMediaDirs(chatId, requestId);
+      const attachedNames = [];
+      for (let i = 0; i < imageParts.length; i++) {
+        const part = imageParts[i];
+        const ext = part.mimeType === 'image/png' ? 'png' : 'jpg';
+        const name = `${requestId}_att_${i + 1}.${ext}`;
+        writeBufferToFile(part.buffer, join(requestDir, name));
+        attachedNames.push(name);
+      }
+      let auditId = null;
+      try {
+        auditId = await createGenerationAudit(
+          chatId, user.Id, prompt, requestId, attachedNames.join(','), null
+        );
+      } catch (e) {
+        console.error('Audit create for preset:', e);
+      }
+      const images = await imagesAndTextToImage(imageParts, prompt, modelId);
+      if (!images || images.length === 0) {
+        await updateGenerationAuditError(auditId, 'No image in response (preset)');
+        await ctx.telegram.deleteMessage(chatId, processingMsg.message_id).catch(() => {});
+        await ctx.reply('Не удалось создать изображение. Попробуй ещё раз.');
+        return;
+      }
+      const fileName = `${requestId}_result.png`;
+      writeBufferToFile(images[0], join(responseDir, fileName));
+      await updateGenerationAuditSuccess(auditId, fileName);
+      await ctx.telegram.deleteMessage(chatId, processingMsg.message_id).catch(() => {});
+      await ctx.replyWithPhoto({ source: images[0], filename: 'image.png' });
+      await consumeGenerations(chatId, 1);
+      await recordImageGenerations(chatId, 1);
+    } catch (err) {
+      console.error('Preset generation error:', err);
+      await ctx.telegram
+        .editMessageText(chatId, processingMsg.message_id, null, 'Не удалось обработать изображение. Попробуй ещё раз.')
+        .catch(() => {});
+    } finally {
+      stopTyping();
     }
   }
 
@@ -1196,6 +1307,20 @@ function registerHandlers(bot, options = {}) {
       return;
     }
 
+    // If user has a pending preset selection, use these images as input for that preset
+    const pendingPreset = pendingPresets.get(chatId);
+    if (pendingPreset) {
+      pendingPresets.delete(chatId);
+      const imageParts = [];
+      for (let i = 0; i < items.length; i++) {
+        const { buffer, filePath } = await downloadPhotoBuffer(bot, items[i].file_id);
+        const mimeType = getPhotoMimeType(filePath);
+        imageParts.push({ buffer, mimeType });
+      }
+      await runPresetGeneration(ctx, imageParts, pendingPreset.presetId);
+      return;
+    }
+
     const { total } = await getAvailableGenerations(chatId);
     if (total < 1) {
       await ctx.reply(noGenerationsMessage, noGenerationsReplyMarkup);
@@ -1300,6 +1425,15 @@ function registerHandlers(bot, options = {}) {
       const { buffer: imageBuffer, filePath } = await downloadPhotoBuffer(bot, photo.file_id);
       const mimeType = getPhotoMimeType(filePath);
       await runPhotosetGeneration(ctx, [{ buffer: imageBuffer, mimeType }], pending.configId);
+      return;
+    }
+
+    const pendingPreset = pendingPresets.get(ctx.chat.id);
+    if (pendingPreset) {
+      pendingPresets.delete(ctx.chat.id);
+      const { buffer: imageBuffer, filePath } = await downloadPhotoBuffer(bot, photo.file_id);
+      const mimeType = getPhotoMimeType(filePath);
+      await runPresetGeneration(ctx, [{ buffer: imageBuffer, mimeType }], pendingPreset.presetId);
       return;
     }
 

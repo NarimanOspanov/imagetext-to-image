@@ -53,12 +53,12 @@ function blobContentType(fileName) {
   return 'image/jpeg';
 }
 
-async function uploadCoverBlob(base64, originalName) {
+async function uploadImageBlob(base64, originalName, folder) {
   const connStr = config.azureStorageConnectionString;
   if (!connStr) throw new Error('AZURE_STORAGE_CONNECTION_STRING not configured');
   const ext = (originalName.split('.').pop() || 'jpg').toLowerCase();
   const blobFileName = `${randomUUID()}.${ext}`;
-  const blobPath = `PhotosetCovers/${blobFileName}`;
+  const blobPath = `${folder}/${blobFileName}`;
   const buffer = Buffer.from(base64, 'base64');
   const client = BlobServiceClient.fromConnectionString(connStr);
   const container = client.getContainerClient(config.azureStorageContainer);
@@ -67,6 +67,14 @@ async function uploadCoverBlob(base64, originalName) {
     blobHTTPHeaders: { blobContentType: blobContentType(originalName) },
   });
   return blobFileName;
+}
+
+function uploadCoverBlob(base64, originalName) {
+  return uploadImageBlob(base64, originalName, 'PhotosetCovers');
+}
+
+function uploadPresetImageBlob(base64, originalName) {
+  return uploadImageBlob(base64, originalName, 'PresetImages');
 }
 
 // ── Storage config (public blob base URL) ────────────────────────────────────
@@ -100,6 +108,28 @@ router.get('/cover/:fileName', async (req, res) => {
     download.readableStreamBody.pipe(res);
   } catch (err) {
     console.error('Cover proxy error:', err?.message);
+    res.status(404).send('Not found');
+  }
+});
+
+// ── Preset image proxy ────────────────────────────────────────────────────────
+router.get('/preset-image/:fileName', async (req, res) => {
+  try {
+    const connStr = config.azureStorageConnectionString;
+    if (!connStr) return res.status(503).send('Storage not configured');
+    const client = BlobServiceClient.fromConnectionString(connStr);
+    const container = client.getContainerClient(config.azureStorageContainer);
+    const fileName = req.params.fileName;
+    const blobName = fileName.startsWith('PresetImages/')
+      ? fileName
+      : `PresetImages/${fileName}`;
+    const blob = container.getBlockBlobClient(blobName);
+    const download = await blob.download(0);
+    res.set('Content-Type', download.contentType || 'image/jpeg');
+    res.set('Cache-Control', 'public, max-age=86400');
+    download.readableStreamBody.pipe(res);
+  } catch (err) {
+    console.error('Preset image proxy error:', err?.message);
     res.status(404).send('Not found');
   }
 });
@@ -187,9 +217,13 @@ router.get('/presets', adminAuth, async (_req, res) => {
 
 router.post('/presets', adminAuth, async (req, res) => {
   try {
-    const { prompt } = req.body;
+    const { prompt, imageBase64, imageFileName } = req.body;
     if (!prompt?.trim()) return res.status(400).json({ error: 'prompt is required' });
-    const row = await models.Presets.create({ Prompt: prompt.trim() });
+    const fields = { Prompt: prompt.trim() };
+    if (imageBase64 && imageFileName) {
+      fields.Image = await uploadPresetImageBlob(imageBase64, imageFileName);
+    }
+    const row = await models.Presets.create(fields);
     res.json(row);
   } catch (err) {
     console.error('Admin POST /presets:', err);
@@ -200,9 +234,13 @@ router.post('/presets', adminAuth, async (req, res) => {
 router.put('/presets/:id', adminAuth, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
-    const { prompt } = req.body;
+    const { prompt, imageBase64, imageFileName } = req.body;
     if (!prompt?.trim()) return res.status(400).json({ error: 'prompt is required' });
-    await models.Presets.update({ Prompt: prompt.trim() }, { where: { Id: id } });
+    const updates = { Prompt: prompt.trim() };
+    if (imageBase64 && imageFileName) {
+      updates.Image = await uploadPresetImageBlob(imageBase64, imageFileName);
+    }
+    await models.Presets.update(updates, { where: { Id: id } });
     const row = await models.Presets.findByPk(id);
     res.json(row);
   } catch (err) {

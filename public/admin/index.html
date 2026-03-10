@@ -195,6 +195,15 @@
   </div>
   <div class="sheet-body">
     <div class="field">
+      <label>Изображение-превью (необязательно)</label>
+      <label class="img-pick" id="prImgPickLabel">
+        <input type="file" id="pr-image" accept="image/*" />
+        <span class="img-pick-icon">🖼</span>
+        <span class="img-pick-label" id="prImgPickText">Нажмите, чтобы выбрать фото</span>
+      </label>
+      <img class="img-preview" id="prImgPreview" alt="Preview" />
+    </div>
+    <div class="field">
       <label>Текст промпта</label>
       <textarea id="pr-prompt" placeholder="Введите полный текст промпта для генерации изображения..." style="min-height:160px"></textarea>
     </div>
@@ -231,6 +240,8 @@
   let linkingConfigId = null;
   let psImageBase64 = null;
   let psImageFileName = null;
+  let prImageBase64 = null;
+  let prImageFileName = null;
   let editingConfigId = null;   // null = create mode, number = edit mode
   let editingPresetId = null;   // null = create mode, number = edit mode
 
@@ -324,6 +335,22 @@
     reader.readAsDataURL(file);
   });
 
+  document.getElementById('pr-image').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    prImageFileName = file.name;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target.result;
+      prImageBase64 = dataUrl.split(',')[1];
+      const preview = document.getElementById('prImgPreview');
+      preview.src = dataUrl;
+      preview.classList.add('visible');
+      document.getElementById('prImgPickText').textContent = file.name;
+    };
+    reader.readAsDataURL(file);
+  });
+
   // ── Photoset form (create & edit) ─────────────────────────────────────────
   function openPhotosetSheet(cfg) {
     editingConfigId = cfg ? cfg.Id : null;
@@ -387,7 +414,19 @@
   // ── Preset form (create & edit) ───────────────────────────────────────────
   function openPresetSheet(preset) {
     editingPresetId = preset ? preset.Id : null;
+    prImageBase64 = null;
+    prImageFileName = null;
     document.getElementById('pr-prompt').value = preset ? preset.Prompt : '';
+    document.getElementById('pr-image').value = '';
+    const preview = document.getElementById('prImgPreview');
+    if (preset?.Image) {
+      preview.src = presetImageUrl(preset.Image);
+      preview.classList.add('visible');
+      document.getElementById('prImgPickText').textContent = 'Нажмите, чтобы заменить фото';
+    } else {
+      preview.classList.remove('visible');
+      document.getElementById('prImgPickText').textContent = 'Нажмите, чтобы выбрать фото';
+    }
     document.querySelector('#sheet-preset .sheet-title').textContent =
       preset ? 'Редактировать промпт' : 'Новый промпт';
     document.getElementById('btn-create-preset').textContent =
@@ -402,23 +441,29 @@
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span>';
     try {
+      const body = { prompt };
+      if (prImageBase64) { body.imageBase64 = prImageBase64; body.imageFileName = prImageFileName; }
       if (editingPresetId) {
-        const updated = await api('PUT', `/presets/${editingPresetId}`, { prompt });
+        const updated = await api('PUT', `/presets/${editingPresetId}`, body);
         const idx = presets.findIndex(p => p.Id === editingPresetId);
         if (idx !== -1) presets[idx] = updated;
-        // also refresh prompt text inside linked configs
         configs.forEach(c => (c.Photosets || []).forEach(ps => {
-          if (ps.PresetId === editingPresetId && ps.Preset) ps.Preset.Prompt = updated.Prompt;
+          if (ps.PresetId === editingPresetId && ps.Preset) {
+            ps.Preset.Prompt = updated.Prompt;
+            ps.Preset.Image = updated.Image;
+          }
         }));
         closeSheet('sheet-preset');
         render();
         showToast('Промпт обновлён ✓', 'success');
       } else {
-        const row = await api('POST', '/presets', { prompt });
+        const row = await api('POST', '/presets', body);
         presets.unshift(row);
         closeSheet('sheet-preset');
         render();
-        showToast('Промпт создан ✓', 'success');
+        const link = presetDeepLink(row.Id);
+        if (link) { showToast('Промпт создан ✓  —  ссылка скопирована!', 'success'); copyText(link); }
+        else { showToast('Промпт создан ✓', 'success'); }
       }
     } catch (err) {
       showToast(err.message, 'error');
@@ -513,6 +558,23 @@
     return `https://t.me/${botUsername}?start=photoset_${configId}`;
   }
 
+  function presetDeepLink(presetId) {
+    if (!botUsername) return null;
+    return `https://t.me/${botUsername}?start=preset_${presetId}`;
+  }
+
+  function presetImageUrl(fileName) {
+    if (!fileName) return null;
+    return `/api/admin/preset-image/${encodeURIComponent(fileName)}`;
+  }
+
+  function copyPresetDeepLink(presetId) {
+    const link = presetDeepLink(presetId);
+    if (!link) { showToast('Имя бота ещё не загружено', 'error'); return; }
+    copyText(link);
+    showToast('Ссылка скопирована ✓', 'success');
+  }
+
   function copyText(text) {
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(text).catch(() => {});
@@ -596,16 +658,38 @@
     if (presets.length === 0) {
       return `<div class="empty"><div class="empty-icon">✏️</div><div class="empty-text">Нет промптов. Нажмите + чтобы создать.</div></div>`;
     }
-    return presets.map(p => `
-      <div class="preset-full-card">
-        <div class="preset-id">#${p.Id}</div>
-        <div class="preset-prompt">${esc(p.Prompt)}</div>
-        <div class="preset-card-footer">
-          <button class="btn-icon" title="Редактировать" onclick="openPresetSheet(presets.find(p=>p.Id===${p.Id}))">✏️</button>
-          <button class="btn-icon danger" title="Удалить" onclick="deletePreset(${p.Id})">🗑</button>
+    return presets.map(p => {
+      const imgUrl = presetImageUrl(p.Image);
+      const link = presetDeepLink(p.Id);
+      const imgHtml = imgUrl
+        ? `<img src="${esc(imgUrl)}" alt="preview"
+              style="width:100%;max-height:180px;object-fit:cover;border-radius:var(--radius-sm) var(--radius-sm) 0 0;display:block;margin-bottom:0"
+              onerror="this.style.display='none'" />`
+        : '';
+      return `
+        <div class="preset-full-card" style="padding:0;overflow:hidden">
+          ${imgHtml}
+          <div style="padding:14px">
+            <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px">
+              <div style="flex:1;min-width:0">
+                <div class="preset-id">#${p.Id}</div>
+                <div class="preset-prompt">${esc(p.Prompt)}</div>
+              </div>
+              <div style="display:flex;gap:6px;flex-shrink:0;padding-top:2px">
+                <button class="btn-icon" title="Редактировать" onclick="openPresetSheet(presets.find(p=>p.Id===${p.Id}))">✏️</button>
+                <button class="btn-icon" title="Копировать ссылку" onclick="copyPresetDeepLink(${p.Id})">🔗</button>
+                <button class="btn-icon danger" title="Удалить" onclick="deletePreset(${p.Id})">🗑</button>
+              </div>
+            </div>
+            ${link ? `
+            <div class="deep-link-bar" style="margin:0">
+              <span class="deep-link-text">${esc(link)}</span>
+              <button class="btn-copy" onclick="copyPresetDeepLink(${p.Id})">Копировать</button>
+            </div>` : ''}
+          </div>
         </div>
-      </div>
-    `).join('');
+      `;
+    }).join('');
   }
 
   function render() {
