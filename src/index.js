@@ -1,4 +1,5 @@
-import { createReadStream, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -87,17 +88,16 @@ function getPhotoMimeType(filePath) {
 }
 
 /** Ensure media/{chatId}/{requestId}/request and .../response exist; returns full paths. */
-function ensureMediaDirs(chatId, requestId) {
+async function ensureMediaDirs(chatId, requestId) {
   const base = join(MEDIA_ROOT, String(chatId), requestId);
   const requestDir = join(base, 'request');
   const responseDir = join(base, 'response');
-  mkdirSync(requestDir, { recursive: true });
-  mkdirSync(responseDir, { recursive: true });
+  await Promise.all([mkdir(requestDir, { recursive: true }), mkdir(responseDir, { recursive: true })]);
   return { requestDir, responseDir };
 }
 
-function writeBufferToFile(buffer, filePath) {
-  writeFileSync(filePath, buffer);
+async function writeBufferToFile(buffer, filePath) {
+  await writeFile(filePath, buffer);
 }
 
 /** Download a blob from Azure Blob Storage; returns a Buffer or null on failure. */
@@ -173,13 +173,11 @@ async function recordImageGenerations(chatId, imageCount, baseFileName = 'image'
   try {
     const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
     if (!user) return;
-    for (let i = 0; i < imageCount; i++) {
-      const resultFileName = imageCount > 1 ? `${baseFileName}-${i + 1}.png` : `${baseFileName}.png`;
-      await models.UserImageGenerations.create({
-        UserId: user.Id,
-        ResultFileName: resultFileName,
-      });
-    }
+    const records = Array.from({ length: imageCount }, (_, i) => ({
+      UserId: user.Id,
+      ResultFileName: imageCount > 1 ? `${baseFileName}-${i + 1}.png` : `${baseFileName}.png`,
+    }));
+    await models.UserImageGenerations.bulkCreate(records);
   } catch (err) {
     console.error('DB error recording generation:', err);
   }
@@ -203,18 +201,19 @@ async function getAvailableGenerations(chatId) {
     const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
     if (!user) return { total: 0, fromFree: 0, fromReferrals: 0, fromPurchases: 0, totalEver: 0 };
     const fromFree = Math.max(0, user.FreeGenerationsRemaining ?? 0);
-    const fromReferrals = await models.Referrals.count({
-      where: { ReferrerUserId: user.Id, BonusUsed: false },
-    });
-    const purchases = await models.UserPurchases.findAll({
-      where: { UserId: user.Id },
-      order: [['PurchasedAt', 'ASC']],
-      attributes: ['Id', 'BalanceRemaining', 'GenerationsIncluded'],
-    });
+    const [fromReferrals, referralTotalCount, purchases] = await Promise.all([
+      models.Referrals.count({ where: { ReferrerUserId: user.Id, BonusUsed: false } }),
+      models.Referrals.count({ where: { ReferrerUserId: user.Id } }),
+      models.UserPurchases.findAll({
+        where: { UserId: user.Id },
+        order: [['PurchasedAt', 'ASC']],
+        attributes: ['Id', 'BalanceRemaining', 'GenerationsIncluded'],
+      }),
+    ]);
     const fromPurchases = purchases.reduce((s, p) => s + (p.BalanceRemaining || 0), 0);
     const totalEver =
       INITIAL_FREE_GENERATIONS +
-      (await models.Referrals.count({ where: { ReferrerUserId: user.Id } })) +
+      referralTotalCount +
       purchases.reduce((s, p) => s + (p.GenerationsIncluded || 0), 0);
     return {
       total: fromFree + fromReferrals + fromPurchases,
@@ -717,13 +716,13 @@ function registerHandlers(bot, options = {}) {
         }
       }
       const requestId = randomUUID();
-      const { requestDir, responseDir } = ensureMediaDirs(chatId, requestId);
+      const { requestDir, responseDir } = await ensureMediaDirs(chatId, requestId);
       const attachedNames = [];
       for (let i = 0; i < imageParts.length; i++) {
         const part = imageParts[i];
         const ext = part.mimeType === 'image/png' ? 'png' : 'jpg';
         const name = `${requestId}_att_${i + 1}.${ext}`;
-        writeBufferToFile(part.buffer, join(requestDir, name));
+        await writeBufferToFile(part.buffer, join(requestDir, name));
         attachedNames.push(name);
       }
       let auditId = null;
@@ -742,7 +741,7 @@ function registerHandlers(bot, options = {}) {
         return;
       }
       const fileName = `${requestId}_result.png`;
-      writeBufferToFile(images[0], join(responseDir, fileName));
+      await writeBufferToFile(images[0], join(responseDir, fileName));
       await updateGenerationAuditSuccess(auditId, fileName);
       await ctx.telegram.deleteMessage(chatId, processingMsg.message_id).catch(() => {});
       await ctx.replyWithPhoto({ source: images[0], filename: 'image.png' });
@@ -1119,7 +1118,7 @@ function registerHandlers(bot, options = {}) {
     let auditId = null;
     try {
       auditId = await createGenerationAudit(ctx.chat.id, user?.Id ?? null, prompt, requestId, null);
-      ensureMediaDirs(ctx.chat.id, requestId);
+      await ensureMediaDirs(ctx.chat.id, requestId);
     } catch (e) {
       console.error('Audit create:', e);
     }
@@ -1133,13 +1132,11 @@ function registerHandlers(bot, options = {}) {
         );
         return;
       }
-      const { responseDir } = ensureMediaDirs(ctx.chat.id, requestId);
-      const resultNames = [];
-      for (let i = 0; i < images.length; i++) {
-        const name = images.length > 1 ? `${requestId}_result_${i + 1}.png` : `${requestId}_result.png`;
-        writeBufferToFile(images[i], join(responseDir, name));
-        resultNames.push(name);
-      }
+      const { responseDir } = await ensureMediaDirs(ctx.chat.id, requestId);
+      const resultNames = images.map((_, i) =>
+        images.length > 1 ? `${requestId}_result_${i + 1}.png` : `${requestId}_result.png`
+      );
+      await Promise.all(images.map((img, i) => writeBufferToFile(img, join(responseDir, resultNames[i]))));
       await updateGenerationAuditSuccess(auditId, resultNames.join(','));
       await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id);
       for (const buffer of images) {
@@ -1213,14 +1210,14 @@ function registerHandlers(bot, options = {}) {
         if (!prompt) continue;
 
         const requestId = randomUUID();
-        const { requestDir, responseDir } = ensureMediaDirs(chatId, requestId);
+        const { requestDir, responseDir } = await ensureMediaDirs(chatId, requestId);
 
         const attachedNames = [];
         for (let i = 0; i < imageParts.length; i++) {
           const part = imageParts[i];
           const ext = part.mimeType === 'image/png' ? 'png' : 'jpg';
           const name = `${requestId}_att_${i + 1}.${ext}`;
-          writeBufferToFile(part.buffer, join(requestDir, name));
+          await writeBufferToFile(part.buffer, join(requestDir, name));
           attachedNames.push(name);
         }
 
@@ -1252,7 +1249,7 @@ function registerHandlers(bot, options = {}) {
             continue;
           }
           const fileName = `${requestId}_result.png`;
-          writeBufferToFile(images[0], join(responseDir, fileName));
+          await writeBufferToFile(images[0], join(responseDir, fileName));
           await updateGenerationAuditSuccess(auditId, fileName);
           await ctx.replyWithPhoto({ source: images[0], filename: 'image.png' });
           generatedCount += 1;
@@ -1297,12 +1294,11 @@ function registerHandlers(bot, options = {}) {
     const pending = pendingPhotosets.get(chatId);
     if (pending) {
       pendingPhotosets.delete(chatId);
-      const imageParts = [];
-      for (let i = 0; i < items.length; i++) {
-        const { buffer, filePath } = await downloadPhotoBuffer(bot, items[i].file_id);
-        const mimeType = getPhotoMimeType(filePath);
-        imageParts.push({ buffer, mimeType });
-      }
+      const downloadResults = await Promise.all(items.map((item) => downloadPhotoBuffer(bot, item.file_id)));
+      const imageParts = downloadResults.map(({ buffer, filePath }) => ({
+        buffer,
+        mimeType: getPhotoMimeType(filePath),
+      }));
       await runPhotosetGeneration(ctx, imageParts, pending.configId);
       return;
     }
@@ -1311,12 +1307,11 @@ function registerHandlers(bot, options = {}) {
     const pendingPreset = pendingPresets.get(chatId);
     if (pendingPreset) {
       pendingPresets.delete(chatId);
-      const imageParts = [];
-      for (let i = 0; i < items.length; i++) {
-        const { buffer, filePath } = await downloadPhotoBuffer(bot, items[i].file_id);
-        const mimeType = getPhotoMimeType(filePath);
-        imageParts.push({ buffer, mimeType });
-      }
+      const downloadResults = await Promise.all(items.map((item) => downloadPhotoBuffer(bot, item.file_id)));
+      const imageParts = downloadResults.map(({ buffer, filePath }) => ({
+        buffer,
+        mimeType: getPhotoMimeType(filePath),
+      }));
       await runPresetGeneration(ctx, imageParts, pendingPreset.presetId);
       return;
     }
@@ -1331,7 +1326,7 @@ function registerHandlers(bot, options = {}) {
     const msg = await ctx.reply('💫 Обрабатываю твой запрос, сейчас будет красиво...');
     const modelId = await getGeminiModelForUser(chatId);
     const requestId = randomUUID();
-    const { requestDir, responseDir } = ensureMediaDirs(chatId, requestId);
+    const { requestDir, responseDir } = await ensureMediaDirs(chatId, requestId);
     const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
     let auditId = null;
     try {
@@ -1342,11 +1337,12 @@ function registerHandlers(bot, options = {}) {
     try {
       const imageParts = [];
       const attachedNames = [];
-      for (let i = 0; i < items.length; i++) {
-        const { buffer, filePath } = await downloadPhotoBuffer(bot, items[i].file_id);
+      const downloadResults = await Promise.all(items.map((item) => downloadPhotoBuffer(bot, item.file_id)));
+      for (let i = 0; i < downloadResults.length; i++) {
+        const { buffer, filePath } = downloadResults[i];
         const ext = (getPhotoMimeType(filePath) === 'image/png') ? 'png' : 'jpg';
         const name = `${requestId}_att_${i + 1}.${ext}`;
-        writeBufferToFile(buffer, join(requestDir, name));
+        await writeBufferToFile(buffer, join(requestDir, name));
         attachedNames.push(name);
         imageParts.push({ buffer, mimeType: getPhotoMimeType(filePath) });
       }
@@ -1365,12 +1361,10 @@ function registerHandlers(bot, options = {}) {
         );
         return;
       }
-      const resultNames = [];
-      for (let i = 0; i < images.length; i++) {
-        const name = images.length > 1 ? `${requestId}_result_${i + 1}.png` : `${requestId}_result.png`;
-        writeBufferToFile(images[i], join(responseDir, name));
-        resultNames.push(name);
-      }
+      const resultNames = images.map((_, i) =>
+        images.length > 1 ? `${requestId}_result_${i + 1}.png` : `${requestId}_result.png`
+      );
+      await Promise.all(images.map((img, i) => writeBufferToFile(img, join(responseDir, resultNames[i]))));
       await updateGenerationAuditSuccess(auditId, resultNames.join(','));
       await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id);
       for (const buffer of images) {
@@ -1446,7 +1440,7 @@ function registerHandlers(bot, options = {}) {
     const msg = await ctx.reply('💫 Обрабатываю твой запрос, сейчас будет красиво...');
     const modelId = await getGeminiModelForUser(ctx.chat.id);
     const requestId = randomUUID();
-    const { requestDir, responseDir } = ensureMediaDirs(ctx.chat.id, requestId);
+    const { requestDir, responseDir } = await ensureMediaDirs(ctx.chat.id, requestId);
     const user = await models.Users.findOne({ where: { TelegramChatId: ctx.chat.id } });
     let auditId = null;
     try {
@@ -1459,7 +1453,7 @@ function registerHandlers(bot, options = {}) {
       const mimeType = getPhotoMimeType(filePath);
       const ext = mimeType === 'image/png' ? 'png' : 'jpg';
       const attName = `${requestId}_att_1.${ext}`;
-      writeBufferToFile(imageBuffer, join(requestDir, attName));
+      await writeBufferToFile(imageBuffer, join(requestDir, attName));
       if (auditId != null) {
         await models.GenerationAudits.update(
           { AttachedImageFileNames: attName },
@@ -1475,12 +1469,10 @@ function registerHandlers(bot, options = {}) {
         );
         return;
       }
-      const resultNames = [];
-      for (let i = 0; i < images.length; i++) {
-        const name = images.length > 1 ? `${requestId}_result_${i + 1}.png` : `${requestId}_result.png`;
-        writeBufferToFile(images[i], join(responseDir, name));
-        resultNames.push(name);
-      }
+      const resultNames = images.map((_, i) =>
+        images.length > 1 ? `${requestId}_result_${i + 1}.png` : `${requestId}_result.png`
+      );
+      await Promise.all(images.map((img, i) => writeBufferToFile(img, join(responseDir, resultNames[i]))));
       await updateGenerationAuditSuccess(auditId, resultNames.join(','));
       await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id);
       for (const buffer of images) {

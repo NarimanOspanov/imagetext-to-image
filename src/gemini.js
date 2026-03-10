@@ -3,6 +3,24 @@ import { config } from './config.js';
 
 const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
 
+/** Max concurrent Gemini API calls to avoid event loop starvation and rate limits. */
+const GEMINI_CONCURRENCY = Math.max(1, parseInt(process.env.GEMINI_CONCURRENCY, 10) || 4);
+let activeCount = 0;
+const waitQueue = [];
+
+async function withConcurrencyLimit(fn) {
+  while (activeCount >= GEMINI_CONCURRENCY) {
+    await new Promise((resolve) => { waitQueue.push(resolve); });
+  }
+  activeCount++;
+  try {
+    return await fn();
+  } finally {
+    activeCount--;
+    if (waitQueue.length > 0) waitQueue.shift()();
+  }
+}
+
 /**
  * Extract image buffers from Gemini generateContent response (parts with inlineData).
  * Matches example: response.candidates[0].content.parts with part.inlineData
@@ -28,19 +46,21 @@ function getImagesFromResponse(response) {
  * @param {string} [modelId] - optional Gemini model id; defaults to config.geminiImageModel
  */
 export async function generateImagesFromText(prompt, count = 1, modelId = null) {
-  const contents = [{ text: prompt }];
-  const model = modelId || config.geminiImageModel;
+  return withConcurrencyLimit(async () => {
+    const contents = [{ text: prompt }];
+    const model = modelId || config.geminiImageModel;
 
-  const response = await ai.models.generateContent({
-    model,
-    contents,
+    const response = await ai.models.generateContent({
+      model,
+      contents,
+    });
+
+    const images = getImagesFromResponse(response);
+    if (images.length === 0) {
+      throw new Error('No image in response');
+    }
+    return images;
   });
-
-  const images = getImagesFromResponse(response);
-  if (images.length === 0) {
-    throw new Error('No image in response');
-  }
-  return images;
 }
 
 /**
@@ -58,31 +78,33 @@ export async function imageAndTextToImage(imageBuffer, mimeType, userPrompt = ''
  * @param {string} [modelId]
  */
 export async function imagesAndTextToImage(imageParts, userPrompt = '', modelId = null) {
-  const text =
-    (userPrompt && userPrompt.trim()) ||
-    'Generate a new image based on these images (same subject and style, new variation).';
+  return withConcurrencyLimit(async () => {
+    const text =
+      (userPrompt && userPrompt.trim()) ||
+      'Generate a new image based on these images (same subject and style, new variation).';
 
-  const contents = [{ text }];
-  for (const part of imageParts) {
-    if (part?.buffer) {
-      contents.push({
-        inlineData: {
-          mimeType: part.mimeType || 'image/png',
-          data: part.buffer.toString('base64'),
-        },
-      });
+    const contents = [{ text }];
+    for (const part of imageParts) {
+      if (part?.buffer) {
+        contents.push({
+          inlineData: {
+            mimeType: part.mimeType || 'image/png',
+            data: part.buffer.toString('base64'),
+          },
+        });
+      }
     }
-  }
 
-  const model = modelId || config.geminiImageModel;
-  const response = await ai.models.generateContent({
-    model,
-    contents,
+    const model = modelId || config.geminiImageModel;
+    const response = await ai.models.generateContent({
+      model,
+      contents,
+    });
+
+    const images = getImagesFromResponse(response);
+    if (images.length === 0) {
+      throw new Error('No image in response');
+    }
+    return images;
   });
-
-  const images = getImagesFromResponse(response);
-  if (images.length === 0) {
-    throw new Error('No image in response');
-  }
-  return images;
 }
