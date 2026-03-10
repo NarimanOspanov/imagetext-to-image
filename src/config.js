@@ -30,6 +30,8 @@ export const config = {
   webhookUrl: getEnv('WEBHOOK_URL') || defaultWebhookUrl,
   geminiImageModel: process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image-preview',
   maxImagesPerRequest: Math.min(parseInt(process.env.MAX_IMAGES_PER_REQUEST, 10) || 1, 4),
+  azureStorageConnectionString: getEnv('AZURE_STORAGE_CONNECTION_STRING'),
+  azureStorageContainer: process.env.AZURE_STORAGE_CONTAINER || 'images',
   // MSSQL (Azure SQL) – override with DB_HOST, DB_NAME, DB_USER, DB_PASSWORD, DB_PORT
   db: {
     host: process.env.DB_HOST || 'sql-st-prod.database.windows.net',

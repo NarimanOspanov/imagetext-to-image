@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import express from 'express';
 import { Telegraf } from 'telegraf';
 import { Sequelize, Op } from 'sequelize';
+import { BlobServiceClient } from '@azure/storage-blob';
 import { config } from './config.js';
 import { sequelize, models } from './db.js';
 import {
@@ -93,6 +94,26 @@ function ensureMediaDirs(chatId, requestId) {
 
 function writeBufferToFile(buffer, filePath) {
   writeFileSync(filePath, buffer);
+}
+
+/** Download a blob from Azure Blob Storage; returns a Buffer or null on failure. */
+async function downloadBlobBuffer(blobName) {
+  try {
+    const connStr = config.azureStorageConnectionString;
+    if (!connStr) return null;
+    const blobServiceClient = BlobServiceClient.fromConnectionString(connStr);
+    const containerClient = blobServiceClient.getContainerClient(config.azureStorageContainer);
+    const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+    const downloadResponse = await blockBlobClient.download(0);
+    const chunks = [];
+    for await (const chunk of downloadResponse.readableStreamBody) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  } catch (err) {
+    console.error('Azure blob download error:', err?.message ?? err);
+    return null;
+  }
 }
 
 /** Create audit record (status: pending). Returns audit Id. */
@@ -559,20 +580,20 @@ function registerHandlers(bot, options = {}) {
 
   async function showPhotosetCard(ctx, configs, index, mode) {
     const { current, keyboard } = buildPhotosetKeyboard(configs, index);
-    const coverPath = join(__dirname, '..', 'PhotosetCovers', current.Image);
     const caption = `${current.Name}\n\n${current.Description}`;
+    const coverBuffer = current.Image ? await downloadBlobBuffer(`PhotosetCovers/${current.Image}`) : null;
 
     if (mode === 'edit' && ctx.callbackQuery?.message) {
       const chatId = ctx.chat.id;
       const messageId = ctx.callbackQuery.message.message_id;
-      if (existsSync(coverPath)) {
+      if (coverBuffer) {
         await ctx.telegram.editMessageMedia(
           chatId,
           messageId,
           undefined,
           {
             type: 'photo',
-            media: { source: createReadStream(coverPath) },
+            media: { source: coverBuffer, filename: current.Image },
             caption,
           },
           {
@@ -585,9 +606,9 @@ function registerHandlers(bot, options = {}) {
         });
       }
     } else {
-      if (existsSync(coverPath)) {
+      if (coverBuffer) {
         await ctx.replyWithPhoto(
-          { source: createReadStream(coverPath) },
+          { source: coverBuffer, filename: current.Image },
           {
             caption,
             reply_markup: { inline_keyboard: keyboard },
