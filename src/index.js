@@ -52,7 +52,8 @@ const IMAGE_MODELS = [
 
 /** Map our model id (Users.ActiveModel) to Gemini API model id. Env overrides: GEMINI_IMAGE_MODEL, GEMINI_IMAGE_MODEL_PRO, etc. */
 function resolveGeminiModelId(ourModelId) {
-  const envKey = ourModelId === 'standard' ? 'GEMINI_IMAGE_MODEL' : `GEMINI_IMAGE_MODEL_${ourModelId.toUpperCase()}`;
+  const id = (ourModelId && String(ourModelId).trim()) || IMAGE_MODELS[0]?.id || 'standard';
+  const envKey = id === 'standard' ? 'GEMINI_IMAGE_MODEL' : `GEMINI_IMAGE_MODEL_${id.toUpperCase().replace(/-/g, '_')}`;
   const envValue = process.env[envKey] || process.env.GEMINI_IMAGE_MODEL;
   return envValue || config.geminiImageModel;
 }
@@ -228,50 +229,79 @@ async function getAvailableGenerations(chatId) {
   }
 }
 
-/** Consume up to `count` generations: free first, then referral bonuses, then purchase balance. */
+/** Consume up to `count` generations: free first, then referral bonuses, then purchase balance. Uses transaction to avoid race when multiple requests run concurrently. */
 async function consumeGenerations(chatId, count) {
-  const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
-  if (!user || count < 1) return false;
-  let left = count;
-  const freeRemaining = Math.max(0, user.FreeGenerationsRemaining ?? 0);
-  if (freeRemaining > 0 && left > 0) {
-    const use = Math.min(left, freeRemaining);
-    await user.update({ FreeGenerationsRemaining: freeRemaining - use });
-    left -= use;
-  }
-  if (left <= 0) return true;
-  const referralRows = await models.Referrals.findAll({
-    where: { ReferrerUserId: user.Id, BonusUsed: false },
-    order: [['Id', 'ASC']],
-    limit: left,
-  });
-  for (const row of referralRows) {
-    if (left <= 0) break;
-    await row.update({ BonusUsed: true });
-    left--;
-  }
-  if (left > 0) {
-    const purchases = await models.UserPurchases.findAll({
-      where: { UserId: user.Id },
-      order: [['PurchasedAt', 'ASC']],
+  if (!chatId || count < 1) return false;
+  const t = await sequelize.transaction();
+  try {
+    const user = await models.Users.findOne({
+      where: { TelegramChatId: chatId },
+      lock: t.LOCK.UPDATE,
+      transaction: t,
     });
-    for (const p of purchases) {
-      if (left <= 0 || (p.BalanceRemaining || 0) <= 0) continue;
-      const use = Math.min(left, p.BalanceRemaining);
-      await p.update({ BalanceRemaining: p.BalanceRemaining - use });
+    if (!user) {
+      await t.rollback();
+      return false;
+    }
+    let left = count;
+    const freeRemaining = Math.max(0, user.FreeGenerationsRemaining ?? 0);
+    if (freeRemaining > 0 && left > 0) {
+      const use = Math.min(left, freeRemaining);
+      await models.Users.update(
+        { FreeGenerationsRemaining: freeRemaining - use },
+        { where: { Id: user.Id }, transaction: t }
+      );
       left -= use;
     }
+    if (left <= 0) {
+      await t.commit();
+      return true;
+    }
+    const referralRows = await models.Referrals.findAll({
+      where: { ReferrerUserId: user.Id, BonusUsed: false },
+      order: [['Id', 'ASC']],
+      limit: left,
+      lock: t.LOCK.UPDATE,
+      transaction: t,
+    });
+    for (const row of referralRows) {
+      if (left <= 0) break;
+      await row.update({ BonusUsed: true }, { transaction: t });
+      left--;
+    }
+    if (left > 0) {
+      const purchases = await models.UserPurchases.findAll({
+        where: { UserId: user.Id },
+        order: [['PurchasedAt', 'ASC']],
+        lock: t.LOCK.UPDATE,
+        transaction: t,
+      });
+      for (const p of purchases) {
+        if (left <= 0 || (p.BalanceRemaining || 0) <= 0) continue;
+        const use = Math.min(left, p.BalanceRemaining);
+        await p.update({ BalanceRemaining: p.BalanceRemaining - use }, { transaction: t });
+        left -= use;
+      }
+    }
+    await t.commit();
+    return left === 0;
+  } catch (err) {
+    await t.rollback();
+    console.error('consumeGenerations error:', err);
+    return false;
   }
-  return left === 0;
 }
 
 function registerHandlers(bot, options = {}) {
   const botUsername = options.botUsername || '';
 
   bot.start(async (ctx) => {
-    const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+    pendingPhotosets.delete(chatId);
+    pendingPresets.delete(chatId);
+    const stopTyping = startTyping(ctx.telegram, chatId);
     try {
-      const chatId = ctx.chat?.id;
       const username = ctx.from?.username ?? null;
       const startPayload = (ctx.message?.text || '').trim().split(/\s+/)[1] || '';
 
@@ -897,7 +927,7 @@ function registerHandlers(bot, options = {}) {
       'Осуществляя платеж с использованием платежного сервиса, вы соглашаетесь с условиями оферты. Сделать возврат можно написав в поддержку @greate_future';
       const buttons = pricings.map((p) => [
         {
-          text: `${p.GenerationsCount} генераций – ${p.PriceInStars} ⭐`,
+          text: `${p.GenerationsCount} генераций – ${p.PriceInStars} ⭐${p.PriceUSD ? ` (~${p.PriceUSD} USD)` : ''}`,
           callback_data: `pay_stars_${p.Id}`,
         },
       ]);
@@ -920,8 +950,9 @@ function registerHandlers(bot, options = {}) {
         return ctx.reply('Этот пакет недоступен для оплаты звёздами.');
       }
       const payload = JSON.stringify({ pricingId: pricing.Id });
-      const title = `${pricing.Name} – ${pricing.GenerationsCount} генераций`;
-      const description = `Пакет «${pricing.Name}»: ${pricing.GenerationsCount} генераций изображений. Оплата Telegram Stars.`;
+      const usdSuffix = pricing.PriceUSD ? ` (~${pricing.PriceUSD})` : '';
+      const title = `${pricing.Name} – ${pricing.GenerationsCount} генераций${usdSuffix}`;
+      const description = `Пакет «${pricing.Name}»: ${pricing.GenerationsCount} генераций изображений. Оплата Telegram Stars.${usdSuffix ? ` Примерно ${pricing.PriceUSD}.` : ''}`;
       try {
         await ctx.telegram.sendInvoice(ctx.chat.id, {
           title,
@@ -1101,6 +1132,7 @@ function registerHandlers(bot, options = {}) {
 
   // Text message → text-to-image
   bot.on('text', async (ctx) => {
+    if (!ctx.chat?.id) return;
     const prompt = ctx.message.text.trim();
     if (!prompt) return ctx.reply('Опиши, какую картинку нужно сгенерировать.');
 
@@ -1287,8 +1319,8 @@ function registerHandlers(bot, options = {}) {
     if (buf.timeoutId) clearTimeout(buf.timeoutId);
     const { items, caption, ctx } = buf;
     if (items.length === 0) return;
-
-    const chatId = ctx.chat.id;
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
 
     // If user has a pending photoset selection, use these images as input for that photoset
     const pending = pendingPhotosets.get(chatId);
@@ -1385,6 +1417,7 @@ function registerHandlers(bot, options = {}) {
 
   // Photo (with optional caption) → image + text to image. Multiple photos in album = one request.
   bot.on('photo', async (ctx) => {
+    if (!ctx.chat?.id) return;
     const caption = (ctx.message.caption || '').trim();
     const photo = ctx.message.photo.slice(-1)[0];
     const mediaGroupId = ctx.message.media_group_id;

@@ -38,6 +38,10 @@ export default function definePricing(sequelize) {
         allowNull: false,
         defaultValue: 0,
       },
+      PriceUSD: {
+        type: DataTypes.STRING(100),
+        allowNull: false,
+      }
     },
     {
       tableName: 'Pricings',
