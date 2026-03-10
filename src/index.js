@@ -8,6 +8,7 @@ import { Sequelize, Op } from 'sequelize';
 import { BlobServiceClient } from '@azure/storage-blob';
 import { config } from './config.js';
 import { sequelize, models } from './db.js';
+import adminRouter from './adminRoutes.js';
 import {
   generateImagesFromText,
   imageAndTextToImage,
@@ -547,6 +548,18 @@ function registerHandlers(bot, options = {}) {
     } finally {
       stopTyping();
     }
+  });
+
+  // —— Admin: secret command; only responds to ADMIN_CHAT_IDS ——
+  bot.command('admin', async (ctx) => {
+    const chatId = String(ctx.chat?.id);
+    if (!ADMIN_CHAT_IDS.includes(chatId)) return;
+    const appUrl = `${(process.env.ADMIN_APP_URL || config.webhookUrl).replace(/\/$/, '')}/admin`;
+    await ctx.reply('🔧 Admin Panel', {
+      reply_markup: {
+        inline_keyboard: [[{ text: '🔧 Открыть Admin Panel', web_app: { url: appUrl } }]],
+      },
+    });
   });
 
   // —— Photosets: show presets-based photoshoot ideas and create photoset ——
@@ -1354,6 +1367,10 @@ async function main() {
   // ── Step 1: bind the HTTP port immediately so Azure health probes get 200 OK ──
   const app = express();
   app.get('/', (_req, res) => res.status(200).send('OK'));
+
+  // Admin Mini App
+  app.use('/api/admin', express.json({ limit: '20mb' }), adminRouter);
+  app.use('/admin', express.static(join(__dirname, '..', 'public', 'admin')));
 
   await new Promise((resolve) => app.listen(port, resolve));
   console.log('HTTP server listening on port', port);
