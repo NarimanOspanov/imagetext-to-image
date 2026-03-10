@@ -50,7 +50,7 @@ export default function defineUser(sequelize) {
       FreeGenerationsRemaining: {
         type: DataTypes.INTEGER,
         allowNull: false,
-        defaultValue: 3,
+        defaultValue: 20,
       },
     },
     {

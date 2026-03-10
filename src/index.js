@@ -195,7 +195,7 @@ async function getGeminiModelForUser(chatId) {
   return resolveGeminiModelId(active);
 }
 
-const INITIAL_FREE_GENERATIONS = 3;
+const INITIAL_FREE_GENERATIONS = 20;
 
 /** Total generations available: free (new user) + referral bonuses (unused) + purchase balance. */
 async function getAvailableGenerations(chatId) {
