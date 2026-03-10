@@ -162,7 +162,7 @@
   <div class="sheet-handle"></div>
   <div class="sheet-header">
     <span class="sheet-title">Новый фотосет</span>
-    <button class="sheet-close" onclick="closeSheet('sheet-photoset')">✕</button>
+    <button class="sheet-close" onclick="editingConfigId=null;closeSheet('sheet-photoset')">✕</button>
   </div>
   <div class="sheet-body">
     <div class="field">
@@ -191,7 +191,7 @@
   <div class="sheet-handle"></div>
   <div class="sheet-header">
     <span class="sheet-title">Новый промпт</span>
-    <button class="sheet-close" onclick="closeSheet('sheet-preset')">✕</button>
+    <button class="sheet-close" onclick="editingPresetId=null;closeSheet('sheet-preset')">✕</button>
   </div>
   <div class="sheet-body">
     <div class="field">
@@ -231,6 +231,8 @@
   let linkingConfigId = null;
   let psImageBase64 = null;
   let psImageFileName = null;
+  let editingConfigId = null;   // null = create mode, number = edit mode
+  let editingPresetId = null;   // null = create mode, number = edit mode
 
   // ── API ───────────────────────────────────────────────────────────────────
   const BASE = '/api/admin';
@@ -299,11 +301,9 @@
   // ── FAB ───────────────────────────────────────────────────────────────────
   document.getElementById('fab').addEventListener('click', () => {
     if (activeTab === 'photosets') {
-      resetPhotosetForm();
-      openSheet('sheet-photoset');
+      openPhotosetSheet(null);
     } else {
-      resetPresetForm();
-      openSheet('sheet-preset');
+      openPresetSheet(null);
     }
   });
 
@@ -324,15 +324,28 @@
     reader.readAsDataURL(file);
   });
 
-  // ── Create Photoset ───────────────────────────────────────────────────────
-  function resetPhotosetForm() {
-    document.getElementById('ps-name').value = '';
-    document.getElementById('ps-desc').value = '';
-    document.getElementById('ps-image').value = '';
-    document.getElementById('imgPreview').classList.remove('visible');
-    document.getElementById('imgPickText').textContent = 'Нажмите, чтобы выбрать фото';
+  // ── Photoset form (create & edit) ─────────────────────────────────────────
+  function openPhotosetSheet(cfg) {
+    editingConfigId = cfg ? cfg.Id : null;
     psImageBase64 = null;
     psImageFileName = null;
+    document.getElementById('ps-name').value = cfg ? cfg.Name : '';
+    document.getElementById('ps-desc').value = cfg ? cfg.Description : '';
+    document.getElementById('ps-image').value = '';
+    const preview = document.getElementById('imgPreview');
+    if (cfg?.Image) {
+      preview.src = coverUrl(cfg.Image);
+      preview.classList.add('visible');
+      document.getElementById('imgPickText').textContent = 'Нажмите, чтобы заменить обложку';
+    } else {
+      preview.classList.remove('visible');
+      document.getElementById('imgPickText').textContent = 'Нажмите, чтобы выбрать фото';
+    }
+    document.querySelector('#sheet-photoset .sheet-title').textContent =
+      cfg ? 'Редактировать фотосет' : 'Новый фотосет';
+    document.getElementById('btn-create-photoset').textContent =
+      cfg ? 'Сохранить изменения' : 'Создать фотосет';
+    openSheet('sheet-photoset');
   }
 
   async function submitPhotoset() {
@@ -340,33 +353,46 @@
     const description = document.getElementById('ps-desc').value.trim();
     if (!name) { showToast('Введите название', 'error'); return; }
     if (!description) { showToast('Введите описание', 'error'); return; }
-    if (!psImageBase64) { showToast('Выберите обложку', 'error'); return; }
+    if (!editingConfigId && !psImageBase64) { showToast('Выберите обложку', 'error'); return; }
     const btn = document.getElementById('btn-create-photoset');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span>';
     try {
-      const row = await api('POST', '/configs', { name, description, imageBase64: psImageBase64, imageFileName: psImageFileName });
-      configs.unshift(row);
-      closeSheet('sheet-photoset');
-      render();
-      const link = deepLink(row.Id);
-      if (link) {
-        showToast('Фотосет создан ✓  —  ссылка скопирована!', 'success');
-        copyText(link);
+      const body = { name, description };
+      if (psImageBase64) { body.imageBase64 = psImageBase64; body.imageFileName = psImageFileName; }
+      if (editingConfigId) {
+        const updated = await api('PUT', `/configs/${editingConfigId}`, body);
+        const idx = configs.findIndex(c => c.Id === editingConfigId);
+        if (idx !== -1) configs[idx] = updated;
+        closeSheet('sheet-photoset');
+        render();
+        showToast('Фотосет обновлён ✓', 'success');
       } else {
-        showToast('Фотосет создан ✓', 'success');
+        const row = await api('POST', '/configs', body);
+        configs.unshift(row);
+        closeSheet('sheet-photoset');
+        render();
+        const link = deepLink(row.Id);
+        if (link) { showToast('Фотосет создан ✓  —  ссылка скопирована!', 'success'); copyText(link); }
+        else { showToast('Фотосет создан ✓', 'success'); }
       }
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
       btn.disabled = false;
-      btn.textContent = 'Создать фотосет';
+      btn.textContent = editingConfigId ? 'Сохранить изменения' : 'Создать фотосет';
     }
   }
 
-  // ── Create Preset ─────────────────────────────────────────────────────────
-  function resetPresetForm() {
-    document.getElementById('pr-prompt').value = '';
+  // ── Preset form (create & edit) ───────────────────────────────────────────
+  function openPresetSheet(preset) {
+    editingPresetId = preset ? preset.Id : null;
+    document.getElementById('pr-prompt').value = preset ? preset.Prompt : '';
+    document.querySelector('#sheet-preset .sheet-title').textContent =
+      preset ? 'Редактировать промпт' : 'Новый промпт';
+    document.getElementById('btn-create-preset').textContent =
+      preset ? 'Сохранить изменения' : 'Создать промпт';
+    openSheet('sheet-preset');
   }
 
   async function submitPreset() {
@@ -376,16 +402,29 @@
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span>';
     try {
-      const row = await api('POST', '/presets', { prompt });
-      presets.unshift(row);
-      closeSheet('sheet-preset');
-      render();
-      showToast('Промпт создан ✓', 'success');
+      if (editingPresetId) {
+        const updated = await api('PUT', `/presets/${editingPresetId}`, { prompt });
+        const idx = presets.findIndex(p => p.Id === editingPresetId);
+        if (idx !== -1) presets[idx] = updated;
+        // also refresh prompt text inside linked configs
+        configs.forEach(c => (c.Photosets || []).forEach(ps => {
+          if (ps.PresetId === editingPresetId && ps.Preset) ps.Preset.Prompt = updated.Prompt;
+        }));
+        closeSheet('sheet-preset');
+        render();
+        showToast('Промпт обновлён ✓', 'success');
+      } else {
+        const row = await api('POST', '/presets', { prompt });
+        presets.unshift(row);
+        closeSheet('sheet-preset');
+        render();
+        showToast('Промпт создан ✓', 'success');
+      }
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
       btn.disabled = false;
-      btn.textContent = 'Создать промпт';
+      btn.textContent = editingPresetId ? 'Сохранить изменения' : 'Создать промпт';
     }
   }
 
@@ -533,6 +572,7 @@
               <div class="card-desc">${esc(cfg.Description)}</div>
             </div>
             <div class="card-actions">
+              <button class="btn-icon" title="Редактировать" onclick="openPhotosetSheet(configs.find(c=>c.Id===${cfg.Id}))">✏️</button>
               <button class="btn-icon" title="Копировать ссылку" onclick="copyDeepLink(${cfg.Id})">🔗</button>
               <button class="btn-icon danger" title="Удалить" onclick="deleteConfig(${cfg.Id})">🗑</button>
             </div>
@@ -561,6 +601,7 @@
         <div class="preset-id">#${p.Id}</div>
         <div class="preset-prompt">${esc(p.Prompt)}</div>
         <div class="preset-card-footer">
+          <button class="btn-icon" title="Редактировать" onclick="openPresetSheet(presets.find(p=>p.Id===${p.Id}))">✏️</button>
           <button class="btn-icon danger" title="Удалить" onclick="deletePreset(${p.Id})">🗑</button>
         </div>
       </div>

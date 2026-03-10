@@ -81,13 +81,12 @@ router.get('/storage-config', adminAuth, (_req, res) => {
 });
 
 // ── Cover image proxy ─────────────────────────────────────────────────────────
-// Proxies photoset cover images from Azure Blob through the server so the
-// admin panel never has to deal with cross-origin or public-access issues.
-router.get('/cover/:fileName', adminAuth, async (req, res) => {
+// No auth required — cover images are already shown to all bot users via
+// replyWithPhoto, so they are not sensitive. <img> tags can't send headers.
+router.get('/cover/:fileName', async (req, res) => {
   try {
     const connStr = config.azureStorageConnectionString;
     if (!connStr) return res.status(503).send('Storage not configured');
-    const { BlobServiceClient } = await import('@azure/storage-blob');
     const client = BlobServiceClient.fromConnectionString(connStr);
     const container = client.getContainerClient(config.azureStorageContainer);
     const fileName = req.params.fileName;
@@ -141,6 +140,28 @@ router.post('/configs', adminAuth, async (req, res) => {
   }
 });
 
+router.put('/configs/:id', adminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const { name, description, imageBase64, imageFileName } = req.body;
+    if (!name?.trim() || !description?.trim()) {
+      return res.status(400).json({ error: 'name and description are required' });
+    }
+    const updates = { Name: name.trim(), Description: description.trim() };
+    if (imageBase64 && imageFileName) {
+      updates.Image = await uploadCoverBlob(imageBase64, imageFileName);
+    }
+    await models.PhotosetConfigs.update(updates, { where: { Id: id } });
+    const full = await models.PhotosetConfigs.findByPk(id, {
+      include: [{ model: models.Photosets, include: [{ model: models.Presets }] }],
+    });
+    res.json(full);
+  } catch (err) {
+    console.error('Admin PUT /configs/:id:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.delete('/configs/:id', adminAuth, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -172,6 +193,20 @@ router.post('/presets', adminAuth, async (req, res) => {
     res.json(row);
   } catch (err) {
     console.error('Admin POST /presets:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/presets/:id', adminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const { prompt } = req.body;
+    if (!prompt?.trim()) return res.status(400).json({ error: 'prompt is required' });
+    await models.Presets.update({ Prompt: prompt.trim() }, { where: { Id: id } });
+    const row = await models.Presets.findByPk(id);
+    res.json(row);
+  } catch (err) {
+    console.error('Admin PUT /presets/:id:', err);
     res.status(500).json({ error: err.message });
   }
 });
