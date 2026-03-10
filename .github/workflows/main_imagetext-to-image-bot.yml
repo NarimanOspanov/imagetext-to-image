@@ -6,7 +6,7 @@ name: Build and deploy Node.js app to Azure Web App - imagetext-to-image-bot
 on:
   push:
     branches:
-      - main
+      - feature/user
   workflow_dispatch:
 
 jobs:

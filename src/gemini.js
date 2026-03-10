@@ -22,13 +22,17 @@ function getImagesFromResponse(response) {
 }
 
 /**
- * Text → image: generate image from text prompt using gemini-3.1-flash-image-preview.
+ * Text → image: generate image from text prompt.
+ * @param {string} prompt
+ * @param {number} count
+ * @param {string} [modelId] - optional Gemini model id; defaults to config.geminiImageModel
  */
-export async function generateImagesFromText(prompt, count = 1) {
+export async function generateImagesFromText(prompt, count = 1, modelId = null) {
   const contents = [{ text: prompt }];
+  const model = modelId || config.geminiImageModel;
 
   const response = await ai.models.generateContent({
-    model: config.geminiImageModel,
+    model,
     contents,
   });
 
@@ -41,26 +45,38 @@ export async function generateImagesFromText(prompt, count = 1) {
 
 /**
  * Photo + caption (or photo only) → image: send image and optional text, get generated image.
- * Uses same pattern as example: contents = [{ text }, { inlineData: { mimeType, data } }].
+ * @param {string} [modelId] - optional Gemini model id; defaults to config.geminiImageModel
  */
-export async function imageAndTextToImage(imageBuffer, mimeType, userPrompt = '') {
-  const base64 = imageBuffer.toString('base64');
+export async function imageAndTextToImage(imageBuffer, mimeType, userPrompt = '', modelId = null) {
+  return imagesAndTextToImage([{ buffer: imageBuffer, mimeType: mimeType || 'image/png' }], userPrompt, modelId);
+}
+
+/**
+ * Multiple photos + prompt → one generated image. Single request with all images.
+ * @param {{ buffer: Buffer, mimeType: string }[]} imageParts - one or more images
+ * @param {string} [userPrompt]
+ * @param {string} [modelId]
+ */
+export async function imagesAndTextToImage(imageParts, userPrompt = '', modelId = null) {
   const text =
-    userPrompt.trim() ||
-    'Generate a new image based on this image (same subject and style, new variation).';
+    (userPrompt && userPrompt.trim()) ||
+    'Generate a new image based on these images (same subject and style, new variation).';
 
-  const contents = [
-    { text },
-    {
-      inlineData: {
-        mimeType: mimeType || 'image/png',
-        data: base64,
-      },
-    },
-  ];
+  const contents = [{ text }];
+  for (const part of imageParts) {
+    if (part?.buffer) {
+      contents.push({
+        inlineData: {
+          mimeType: part.mimeType || 'image/png',
+          data: part.buffer.toString('base64'),
+        },
+      });
+    }
+  }
 
+  const model = modelId || config.geminiImageModel;
   const response = await ai.models.generateContent({
-    model: config.geminiImageModel,
+    model,
     contents,
   });
 
