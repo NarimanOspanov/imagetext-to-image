@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Admin Panel</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        var(--tg-theme-bg-color, #ffffff);
+      --bg2:       var(--tg-theme-secondary-bg-color, #f2f2f7);
+      --text:      var(--tg-theme-text-color, #000000);
+      --hint:      var(--tg-theme-hint-color, #8e8e93);
+      --accent:    var(--tg-theme-button-color, #007aff);
+      --accent-t:  var(--tg-theme-button-text-color, #ffffff);
+      --link:      var(--tg-theme-link-color, #007aff);
+      --danger:    #ff3b30;
+      --success:   #34c759;
+      --border:    rgba(0,0,0,.10);
+      --radius:    14px;
+      --radius-sm: 10px;
+      --shadow:    0 2px 12px rgba(0,0,0,.08);
+      --transition: .2s ease;
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    html, body { height: 100%; background: var(--bg2); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-size: 16px; -webkit-font-smoothing: antialiased; }
+
+    /* ── Layout ──────────────────────────────────────────── */
+    #app { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+
+    .header {
+      background: var(--bg);
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 10px;
+      flex-shrink: 0;
+    }
+    .header h1 { font-size: 18px; font-weight: 700; flex: 1; }
+    .header .badge { font-size: 12px; color: var(--hint); background: var(--bg2); padding: 3px 8px; border-radius: 20px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .tabs { display: flex; background: var(--bg); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .tab { flex: 1; padding: 12px 4px; background: none; border: none; color: var(--hint); font-size: 13px; font-weight: 500; cursor: pointer; border-bottom: 2px solid transparent; transition: color var(--transition), border-color var(--transition); }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    .content { flex: 1; overflow-y: auto; padding: 16px 16px calc(80px + var(--safe-bottom)); }
+
+    /* ── Cards ───────────────────────────────────────────── */
+    .card { background: var(--bg); border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 12px; overflow: hidden; }
+    .card-cover { width: 100%; height: 190px; object-fit: cover; display: block; }
+    .card-cover-placeholder { width: 100%; height: 110px; background: var(--bg2); display: flex; align-items: center; justify-content: center; font-size: 48px; }
+    .card-header { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px 8px; }
+    .card-info { flex: 1; min-width: 0; }
+    .card-title { font-size: 15px; font-weight: 600; margin-bottom: 3px; }
+    .card-desc { font-size: 13px; color: var(--hint); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .card-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; padding-top: 2px; }
+    .btn-icon { width: 36px; height: 36px; border-radius: 50%; border: none; background: var(--bg2); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; transition: opacity var(--transition); }
+    .btn-icon:active { opacity: .6; }
+    .btn-icon.danger { background: rgba(255,59,48,.12); }
+    .deep-link-bar { margin: 0 14px 10px; background: var(--bg2); border-radius: var(--radius-sm); padding: 8px 10px; display: flex; align-items: center; gap: 8px; }
+    .deep-link-text { flex: 1; font-size: 12px; color: var(--hint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; }
+    .btn-copy { flex-shrink: 0; padding: 5px 12px; background: var(--accent); color: var(--accent-t); border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+
+    .card-body { padding: 0 14px 14px; }
+    .card-section-title { font-size: 12px; font-weight: 600; color: var(--hint); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+
+    .preset-chip { display: flex; align-items: center; gap: 8px; background: var(--bg2); border-radius: var(--radius-sm); padding: 8px 10px; margin-bottom: 6px; }
+    .preset-chip-text { flex: 1; font-size: 13px; color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .preset-chip-del { flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; border: none; background: rgba(255,59,48,.15); color: var(--danger); font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+
+    .btn-add-link { width: 100%; padding: 10px; background: rgba(0,122,255,.10); color: var(--accent); border: 1.5px dashed var(--accent); border-radius: var(--radius-sm); font-size: 14px; font-weight: 500; cursor: pointer; margin-top: 4px; }
+    .btn-add-link:active { opacity: .7; }
+
+    .preset-full-card { background: var(--bg); border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 12px; padding: 14px; }
+    .preset-id { font-size: 11px; color: var(--hint); margin-bottom: 4px; }
+    .preset-prompt { font-size: 14px; line-height: 1.5; word-break: break-word; }
+    .preset-card-footer { display: flex; justify-content: flex-end; margin-top: 10px; }
+
+    .empty { text-align: center; padding: 48px 24px; }
+    .empty-icon { font-size: 48px; margin-bottom: 12px; }
+    .empty-text { color: var(--hint); font-size: 15px; }
+
+    /* ── FAB ─────────────────────────────────────────────── */
+    .fab { position: fixed; bottom: calc(24px + var(--safe-bottom)); right: 20px; width: 56px; height: 56px; border-radius: 50%; background: var(--accent); color: var(--accent-t); border: none; font-size: 28px; cursor: pointer; box-shadow: 0 4px 16px rgba(0,122,255,.4); display: flex; align-items: center; justify-content: center; z-index: 100; transition: transform var(--transition), opacity var(--transition); }
+    .fab:active { transform: scale(.93); }
+
+    /* ── Overlay & Sheet ─────────────────────────────────── */
+    .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 200; opacity: 0; pointer-events: none; transition: opacity .25s ease; }
+    .overlay.visible { opacity: 1; pointer-events: all; }
+
+    .sheet { position: fixed; bottom: 0; left: 0; right: 0; background: var(--bg); border-radius: 20px 20px 0 0; z-index: 300; padding: 0 0 calc(16px + var(--safe-bottom)); max-height: 92dvh; display: flex; flex-direction: column; transform: translateY(100%); transition: transform .3s cubic-bezier(.32,.72,0,1); }
+    .sheet.open { transform: translateY(0); }
+
+    .sheet-handle { width: 36px; height: 4px; background: var(--hint); opacity: .4; border-radius: 2px; margin: 10px auto 0; flex-shrink: 0; }
+    .sheet-header { display: flex; align-items: center; padding: 14px 16px 10px; flex-shrink: 0; border-bottom: 1px solid var(--border); }
+    .sheet-title { font-size: 17px; font-weight: 700; flex: 1; }
+    .sheet-close { width: 30px; height: 30px; border-radius: 50%; background: var(--bg2); border: none; font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--hint); }
+    .sheet-body { overflow-y: auto; padding: 16px; flex: 1; }
+
+    /* ── Form ────────────────────────────────────────────── */
+    .field { margin-bottom: 16px; }
+    .field label { display: block; font-size: 13px; font-weight: 600; color: var(--hint); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .4px; }
+    .field input, .field textarea { width: 100%; padding: 12px 14px; background: var(--bg2); border: 1.5px solid transparent; border-radius: var(--radius-sm); font-size: 15px; color: var(--text); outline: none; transition: border-color var(--transition); resize: vertical; font-family: inherit; }
+    .field input:focus, .field textarea:focus { border-color: var(--accent); }
+    .field textarea { min-height: 100px; }
+
+    .img-pick { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; background: var(--bg2); border-radius: var(--radius-sm); border: 1.5px dashed var(--hint); cursor: pointer; transition: border-color var(--transition); }
+    .img-pick:hover { border-color: var(--accent); }
+    .img-pick input { display: none; }
+    .img-pick-icon { font-size: 32px; }
+    .img-pick-label { font-size: 14px; color: var(--hint); }
+    .img-preview { width: 100%; max-height: 180px; object-fit: cover; border-radius: var(--radius-sm); display: none; }
+    .img-preview.visible { display: block; }
+
+    .btn-primary { width: 100%; padding: 14px; background: var(--accent); color: var(--accent-t); border: none; border-radius: var(--radius-sm); font-size: 16px; font-weight: 600; cursor: pointer; transition: opacity var(--transition); margin-top: 4px; }
+    .btn-primary:active { opacity: .8; }
+    .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* ── Preset list in link sheet ───────────────────────── */
+    .preset-list-item { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border-radius: var(--radius-sm); cursor: pointer; transition: background var(--transition); }
+    .preset-list-item:active { background: var(--bg2); }
+    .preset-list-item-id { font-size: 11px; color: var(--hint); min-width: 28px; padding-top: 2px; }
+    .preset-list-item-text { font-size: 14px; line-height: 1.4; word-break: break-word; }
+    .preset-list-item + .preset-list-item { border-top: 1px solid var(--border); }
+
+    /* ── Toast ───────────────────────────────────────────── */
+    .toast { position: fixed; bottom: calc(90px + var(--safe-bottom)); left: 50%; transform: translateX(-50%) translateY(20px); background: rgba(0,0,0,.85); color: #fff; padding: 10px 20px; border-radius: 24px; font-size: 14px; z-index: 500; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; white-space: nowrap; max-width: calc(100vw - 32px); text-align: center; }
+    .toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+    .toast.success { background: var(--success); }
+    .toast.error { background: var(--danger); }
+
+    /* ── Skeleton ────────────────────────────────────────── */
+    @keyframes shimmer { 0%{background-position:-400px 0} 100%{background-position:400px 0} }
+    .skeleton { background: linear-gradient(90deg, var(--bg2) 25%, var(--border) 50%, var(--bg2) 75%); background-size: 800px 100%; animation: shimmer 1.4s infinite; border-radius: 8px; }
+
+    .spinner { width: 24px; height: 24px; border: 3px solid var(--bg2); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-center { display: flex; justify-content: center; align-items: center; padding: 48px; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header class="header">
+    <h1>🔧 Admin</h1>
+    <div class="badge" id="userBadge"></div>
+  </header>
+  <nav class="tabs">
+    <button class="tab active" data-tab="photosets">📸 Фотосеты</button>
+    <button class="tab" data-tab="presets">✏️ Промпты</button>
+  </nav>
+  <main class="content" id="content"></main>
+  <button class="fab" id="fab" title="Создать">+</button>
+</div>
+
+<!-- Overlay -->
+<div class="overlay" id="overlay"></div>
+
+<!-- Sheet: Create Photoset -->
+<div class="sheet" id="sheet-photoset">
+  <div class="sheet-handle"></div>
+  <div class="sheet-header">
+    <span class="sheet-title">Новый фотосет</span>
+    <button class="sheet-close" onclick="closeSheet('sheet-photoset')">✕</button>
+  </div>
+  <div class="sheet-body">
+    <div class="field">
+      <label>Название</label>
+      <input id="ps-name" type="text" placeholder="Пример: Офисный образ" />
+    </div>
+    <div class="field">
+      <label>Описание</label>
+      <textarea id="ps-desc" placeholder="Краткое описание стиля фотосета..."></textarea>
+    </div>
+    <div class="field">
+      <label>Обложка</label>
+      <label class="img-pick" id="imgPickLabel">
+        <input type="file" id="ps-image" accept="image/*" />
+        <span class="img-pick-icon">🖼</span>
+        <span class="img-pick-label" id="imgPickText">Нажмите, чтобы выбрать фото</span>
+      </label>
+      <img class="img-preview" id="imgPreview" alt="Preview" />
+    </div>
+    <button class="btn-primary" id="btn-create-photoset" onclick="submitPhotoset()">Создать фотосет</button>
+  </div>
+</div>
+
+<!-- Sheet: Create Preset -->
+<div class="sheet" id="sheet-preset">
+  <div class="sheet-handle"></div>
+  <div class="sheet-header">
+    <span class="sheet-title">Новый промпт</span>
+    <button class="sheet-close" onclick="closeSheet('sheet-preset')">✕</button>
+  </div>
+  <div class="sheet-body">
+    <div class="field">
+      <label>Текст промпта</label>
+      <textarea id="pr-prompt" placeholder="Введите полный текст промпта для генерации изображения..." style="min-height:160px"></textarea>
+    </div>
+    <button class="btn-primary" id="btn-create-preset" onclick="submitPreset()">Создать промпт</button>
+  </div>
+</div>
+
+<!-- Sheet: Link preset to photoset -->
+<div class="sheet" id="sheet-link">
+  <div class="sheet-handle"></div>
+  <div class="sheet-header">
+    <span class="sheet-title">Добавить промпт</span>
+    <button class="sheet-close" onclick="closeSheet('sheet-link')">✕</button>
+  </div>
+  <div class="sheet-body" id="link-list"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  // ── Telegram WebApp init ──────────────────────────────────────────────────
+  const tg = window.Telegram?.WebApp;
+  if (tg) {
+    tg.ready();
+    tg.expand();
+  }
+  const INIT_DATA = tg?.initData || '';
+
+  // ── State ─────────────────────────────────────────────────────────────────
+  let configs = [];
+  let presets = [];
+  let botUsername = '';
+  let activeTab = 'photosets';
+  let linkingConfigId = null;
+  let psImageBase64 = null;
+  let psImageFileName = null;
+
+  // ── API ───────────────────────────────────────────────────────────────────
+  const BASE = '/api/admin';
+
+  async function api(method, path, body) {
+    const opts = {
+      method,
+      headers: { 'x-init-data': INIT_DATA },
+    };
+    if (body !== undefined) {
+      opts.headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(body);
+    }
+    const res = await fetch(BASE + path, opts);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }
+
+  async function loadAll() {
+    const [cfgs, prs, bi] = await Promise.all([
+      api('GET', '/configs'),
+      api('GET', '/presets'),
+      fetch('/api/admin/bot-info').then(r => r.json()).catch(() => ({ botUsername: '' })),
+    ]);
+    configs = cfgs;
+    presets = prs;
+    botUsername = bi.botUsername || '';
+  }
+
+  // ── Toast ─────────────────────────────────────────────────────────────────
+  let toastTimer;
+  function showToast(msg, type = '') {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'toast visible' + (type ? ' ' + type : '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('visible'), 2800);
+  }
+
+  // ── Sheet helpers ─────────────────────────────────────────────────────────
+  function openSheet(id) {
+    document.getElementById('overlay').classList.add('visible');
+    document.getElementById(id).classList.add('open');
+  }
+  function closeSheet(id) {
+    document.getElementById(id).classList.remove('open');
+    const anyOpen = document.querySelectorAll('.sheet.open').length > 0;
+    if (!anyOpen) document.getElementById('overlay').classList.remove('visible');
+  }
+  document.getElementById('overlay').addEventListener('click', () => {
+    document.querySelectorAll('.sheet.open').forEach(s => s.classList.remove('open'));
+    document.getElementById('overlay').classList.remove('visible');
+  });
+
+  // ── Tabs ──────────────────────────────────────────────────────────────────
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      activeTab = tab.dataset.tab;
+      render();
+    });
+  });
+
+  // ── FAB ───────────────────────────────────────────────────────────────────
+  document.getElementById('fab').addEventListener('click', () => {
+    if (activeTab === 'photosets') {
+      resetPhotosetForm();
+      openSheet('sheet-photoset');
+    } else {
+      resetPresetForm();
+      openSheet('sheet-preset');
+    }
+  });
+
+  // ── Image picker ──────────────────────────────────────────────────────────
+  document.getElementById('ps-image').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    psImageFileName = file.name;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target.result;
+      psImageBase64 = dataUrl.split(',')[1];
+      const preview = document.getElementById('imgPreview');
+      preview.src = dataUrl;
+      preview.classList.add('visible');
+      document.getElementById('imgPickText').textContent = file.name;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  // ── Create Photoset ───────────────────────────────────────────────────────
+  function resetPhotosetForm() {
+    document.getElementById('ps-name').value = '';
+    document.getElementById('ps-desc').value = '';
+    document.getElementById('ps-image').value = '';
+    document.getElementById('imgPreview').classList.remove('visible');
+    document.getElementById('imgPickText').textContent = 'Нажмите, чтобы выбрать фото';
+    psImageBase64 = null;
+    psImageFileName = null;
+  }
+
+  async function submitPhotoset() {
+    const name = document.getElementById('ps-name').value.trim();
+    const description = document.getElementById('ps-desc').value.trim();
+    if (!name) { showToast('Введите название', 'error'); return; }
+    if (!description) { showToast('Введите описание', 'error'); return; }
+    if (!psImageBase64) { showToast('Выберите обложку', 'error'); return; }
+    const btn = document.getElementById('btn-create-photoset');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>';
+    try {
+      const row = await api('POST', '/configs', { name, description, imageBase64: psImageBase64, imageFileName: psImageFileName });
+      configs.unshift(row);
+      closeSheet('sheet-photoset');
+      render();
+      const link = deepLink(row.Id);
+      if (link) {
+        showToast('Фотосет создан ✓  —  ссылка скопирована!', 'success');
+        copyText(link);
+      } else {
+        showToast('Фотосет создан ✓', 'success');
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Создать фотосет';
+    }
+  }
+
+  // ── Create Preset ─────────────────────────────────────────────────────────
+  function resetPresetForm() {
+    document.getElementById('pr-prompt').value = '';
+  }
+
+  async function submitPreset() {
+    const prompt = document.getElementById('pr-prompt').value.trim();
+    if (!prompt) { showToast('Введите промпт', 'error'); return; }
+    const btn = document.getElementById('btn-create-preset');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>';
+    try {
+      const row = await api('POST', '/presets', { prompt });
+      presets.unshift(row);
+      closeSheet('sheet-preset');
+      render();
+      showToast('Промпт создан ✓', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Создать промпт';
+    }
+  }
+
+  // ── Delete helpers ────────────────────────────────────────────────────────
+  async function deleteConfig(id) {
+    if (!confirm('Удалить фотосет и все его промпты?')) return;
+    try {
+      await api('DELETE', `/configs/${id}`);
+      configs = configs.filter(c => c.Id !== id);
+      render();
+      showToast('Фотосет удалён', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  async function deletePreset(id) {
+    if (!confirm('Удалить этот промпт? Он будет отвязан от всех фотосетов.')) return;
+    try {
+      await api('DELETE', `/presets/${id}`);
+      presets = presets.filter(p => p.Id !== id);
+      // also remove from configs
+      configs.forEach(c => {
+        if (c.Photosets) c.Photosets = c.Photosets.filter(ps => ps.PresetId !== id);
+      });
+      render();
+      showToast('Промпт удалён', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  async function unlinkPreset(linkId, configId) {
+    try {
+      await api('DELETE', `/links/${linkId}`);
+      const cfg = configs.find(c => c.Id === configId);
+      if (cfg) cfg.Photosets = cfg.Photosets.filter(ps => ps.Id !== linkId);
+      render();
+      showToast('Промпт отвязан', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  // ── Link preset to config ─────────────────────────────────────────────────
+  function openLinkSheet(configId) {
+    linkingConfigId = configId;
+    const cfg = configs.find(c => c.Id === configId);
+    const linkedPresetIds = new Set((cfg?.Photosets || []).map(ps => ps.PresetId));
+    const available = presets.filter(p => !linkedPresetIds.has(p.Id));
+    const listEl = document.getElementById('link-list');
+    if (available.length === 0) {
+      listEl.innerHTML = `<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">Все промпты уже добавлены</div></div>`;
+    } else {
+      listEl.innerHTML = available.map(p => `
+        <div class="preset-list-item" onclick="linkPreset(${p.Id})">
+          <span class="preset-list-item-id">#${p.Id}</span>
+          <span class="preset-list-item-text">${esc(p.Prompt)}</span>
+        </div>
+      `).join('');
+    }
+    openSheet('sheet-link');
+  }
+
+  async function linkPreset(presetId) {
+    if (!linkingConfigId) return;
+    try {
+      const row = await api('POST', '/links', { photosetConfigId: linkingConfigId, presetId });
+      const cfg = configs.find(c => c.Id === linkingConfigId);
+      const preset = presets.find(p => p.Id === presetId);
+      if (cfg) {
+        cfg.Photosets = cfg.Photosets || [];
+        cfg.Photosets.push({ Id: row.Id, PresetId: presetId, Preset: preset });
+      }
+      closeSheet('sheet-link');
+      render();
+      showToast('Промпт добавлен ✓', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  // ── Deep link helpers ─────────────────────────────────────────────────────
+  function deepLink(configId) {
+    if (!botUsername) return null;
+    return `https://t.me/${botUsername}?start=photoset_${configId}`;
+  }
+
+  function copyText(text) {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+  }
+
+  function copyDeepLink(configId) {
+    const link = deepLink(configId);
+    if (!link) { showToast('Имя бота ещё не загружено', 'error'); return; }
+    copyText(link);
+    showToast('Ссылка скопирована ✓', 'success');
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  function esc(str) {
+    return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // Always route cover images through the server proxy — no cross-origin or
+  // public-access issues, works even if the blob container is private.
+  function coverUrl(fileName) {
+    if (!fileName) return null;
+    return `/api/admin/cover/${encodeURIComponent(fileName)}`;
+  }
+
+  function renderPhotosets() {
+    if (configs.length === 0) {
+      return `<div class="empty"><div class="empty-icon">📸</div><div class="empty-text">Нет фотосетов. Нажмите + чтобы создать.</div></div>`;
+    }
+    return configs.map(cfg => {
+      const cover = coverUrl(cfg.Image);
+      const coverHtml = cover
+        ? `<img class="card-cover" src="${esc(cover)}" alt="${esc(cfg.Name)}"
+              onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" />
+           <div class="card-cover-placeholder" style="display:none">📸</div>`
+        : `<div class="card-cover-placeholder">📸</div>`;
+      const link = deepLink(cfg.Id);
+      const linkedPresets = cfg.Photosets || [];
+      const presetsHtml = linkedPresets.map(ps => `
+        <div class="preset-chip">
+          <span class="preset-chip-text">${esc(ps.Preset?.Prompt || '')}</span>
+          <button class="preset-chip-del" title="Отвязать" onclick="unlinkPreset(${ps.Id}, ${cfg.Id})">✕</button>
+        </div>
+      `).join('');
+      return `
+        <div class="card">
+          ${coverHtml}
+          <div class="card-header">
+            <div class="card-info">
+              <div class="card-title">${esc(cfg.Name)}</div>
+              <div class="card-desc">${esc(cfg.Description)}</div>
+            </div>
+            <div class="card-actions">
+              <button class="btn-icon" title="Копировать ссылку" onclick="copyDeepLink(${cfg.Id})">🔗</button>
+              <button class="btn-icon danger" title="Удалить" onclick="deleteConfig(${cfg.Id})">🗑</button>
+            </div>
+          </div>
+          ${link ? `
+          <div class="deep-link-bar">
+            <span class="deep-link-text">${esc(link)}</span>
+            <button class="btn-copy" onclick="copyDeepLink(${cfg.Id})">Копировать</button>
+          </div>` : ''}
+          <div class="card-body">
+            <div class="card-section-title">Промпты (${linkedPresets.length})</div>
+            ${presetsHtml}
+            <button class="btn-add-link" onclick="openLinkSheet(${cfg.Id})">+ Добавить промпт</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderPresets() {
+    if (presets.length === 0) {
+      return `<div class="empty"><div class="empty-icon">✏️</div><div class="empty-text">Нет промптов. Нажмите + чтобы создать.</div></div>`;
+    }
+    return presets.map(p => `
+      <div class="preset-full-card">
+        <div class="preset-id">#${p.Id}</div>
+        <div class="preset-prompt">${esc(p.Prompt)}</div>
+        <div class="preset-card-footer">
+          <button class="btn-icon danger" title="Удалить" onclick="deletePreset(${p.Id})">🗑</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function render() {
+    const el = document.getElementById('content');
+    el.innerHTML = activeTab === 'photosets' ? renderPhotosets() : renderPresets();
+  }
+
+  // ── Boot ──────────────────────────────────────────────────────────────────
+  (async () => {
+    // Show user badge
+    const user = tg?.initDataUnsafe?.user;
+    if (user) {
+      document.getElementById('userBadge').textContent = user.username ? `@${user.username}` : user.first_name;
+    }
+
+    // Show loading
+    document.getElementById('content').innerHTML = `<div class="loading-center"><div class="spinner"></div></div>`;
+
+    try {
+      await loadAll();
+      render();
+    } catch (err) {
+      document.getElementById('content').innerHTML = `
+        <div class="empty">
+          <div class="empty-icon">⚠️</div>
+          <div class="empty-text">${esc(err.message)}</div>
+        </div>`;
+    }
+  })();
+</script>
+</body>
+</html>
