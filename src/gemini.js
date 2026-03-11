@@ -40,6 +40,32 @@ function getImagesFromResponse(response) {
 }
 
 /**
+ * Determine why the response has no image: safety block, policy, rate limit, or unknown.
+ * Returns a short reason string for the error message (e.g. "SAFETY", "RECITATION", "RATE_LIMIT").
+ */
+function getNoImageReason(response) {
+  if (!response) return null;
+  // Prompt was blocked (e.g. safety filter on input)
+  const promptFeedback = response.promptFeedback ?? response.prompt_feedback;
+  const blockReason = promptFeedback?.blockReason ?? promptFeedback?.block_reason;
+  if (blockReason != null && blockReason !== '') {
+    const r = String(blockReason).toUpperCase();
+    if (r.includes('SAFETY') || r.includes('PROHIBITED') || r.includes('BLOCK')) return 'SAFETY';
+    return r;
+  }
+  // Candidate was blocked or stopped (e.g. safety on output, recitation)
+  const c0 = response.candidates?.[0];
+  const finishReason = c0?.finishReason ?? c0?.finish_reason;
+  if (finishReason != null && finishReason !== '') {
+    const r = String(finishReason).toUpperCase();
+    if (r.includes('SAFETY') || r === 'RECITATION' || r.includes('BLOCK')) return 'SAFETY';
+    if (r.includes('MAX_TOKENS') || r.includes('LENGTH')) return 'MAX_TOKENS';
+    return r;
+  }
+  return null;
+}
+
+/**
  * Text → image: generate image from text prompt.
  * @param {string} prompt
  * @param {number} count
@@ -57,7 +83,10 @@ export async function generateImagesFromText(prompt, count = 1, modelId = null) 
 
     const images = getImagesFromResponse(response);
     if (images.length === 0) {
-      throw new Error('No image in response');
+      const reason = getNoImageReason(response);
+      const msg = reason ? `No image in response: ${reason}` : 'No image in response';
+      if (reason) console.warn('Gemini no image:', reason, '(prompt may be blocked by safety or policy)');
+      throw new Error(msg);
     }
     return images;
   });
@@ -103,7 +132,10 @@ export async function imagesAndTextToImage(imageParts, userPrompt = '', modelId 
 
     const images = getImagesFromResponse(response);
     if (images.length === 0) {
-      throw new Error('No image in response');
+      const reason = getNoImageReason(response);
+      const msg = reason ? `No image in response: ${reason}` : 'No image in response';
+      if (reason) console.warn('Gemini no image:', reason, '(prompt or output may be blocked by safety or policy)');
+      throw new Error(msg);
     }
     return images;
   });

@@ -779,8 +779,10 @@ function registerHandlers(bot, options = {}) {
       await recordImageGenerations(chatId, 1);
     } catch (err) {
       console.error('Preset generation error:', err);
+      await updateGenerationAuditError(auditId, err?.message ?? String(err));
+      const presetErrText = err?.message?.includes('SAFETY') ? safetyBlockMessage : 'Не удалось обработать изображение. Попробуй ещё раз.';
       await ctx.telegram
-        .editMessageText(chatId, processingMsg.message_id, null, 'Не удалось обработать изображение. Попробуй ещё раз.')
+        .editMessageText(chatId, processingMsg.message_id, null, presetErrText)
         .catch(() => {});
     } finally {
       stopTyping();
@@ -1113,6 +1115,9 @@ function registerHandlers(bot, options = {}) {
     );
   });
 
+  /** User-facing message when Gemini blocks due to safety/policy (e.g. sexual content). */
+  const safetyBlockMessage =
+    'Запрос заблокирован фильтрами безопасности. Попробуй другое описание или другое фото.';
   const noGenerationsMessage =
     '⛔️ Ты использовал все бесплатные генерации\n\n' +
     'Каждая картинка стоит нам реальных денег 💸\n' +
@@ -1180,7 +1185,7 @@ function registerHandlers(bot, options = {}) {
       console.error('Text-to-image error:', err);
       await updateGenerationAuditError(auditId, err?.message ?? String(err));
       const text = err?.message?.includes('SAFETY')
-        ? 'Запрос заблокирован фильтрами безопасности. Попробуй другое описание.'
+        ? safetyBlockMessage
         : 'Что-то пошло не так. Попробуй ещё раз.';
       await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, text).catch(() => {});
     } finally {
@@ -1407,8 +1412,9 @@ function registerHandlers(bot, options = {}) {
     } catch (err) {
       console.error('Image+text-to-image (group) error:', err);
       await updateGenerationAuditError(auditId, err?.message ?? String(err));
+      const groupErrText = err?.message?.includes('SAFETY') ? safetyBlockMessage : 'Не удалось обработать изображение. Попробуй ещё раз.';
       await ctx.telegram
-        .editMessageText(ctx.chat.id, msg.message_id, null, 'Не удалось обработать изображение. Попробуй ещё раз.')
+        .editMessageText(ctx.chat.id, msg.message_id, null, groupErrText)
         .catch(() => {});
     } finally {
       stopTyping();
@@ -1516,8 +1522,9 @@ function registerHandlers(bot, options = {}) {
     } catch (err) {
       console.error('Image+text-to-image error:', err);
       await updateGenerationAuditError(auditId, err?.message ?? String(err));
+      const photoErrText = err?.message?.includes('SAFETY') ? safetyBlockMessage : 'Не удалось обработать изображение. Попробуй ещё раз.';
       await ctx.telegram
-        .editMessageText(ctx.chat.id, msg.message_id, null, 'Не удалось обработать изображение. Попробуй ещё раз.')
+        .editMessageText(ctx.chat.id, msg.message_id, null, photoErrText)
         .catch(() => {});
     } finally {
       stopTyping();
