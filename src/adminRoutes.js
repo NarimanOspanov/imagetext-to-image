@@ -195,7 +195,22 @@ router.put('/configs/:id', adminAuth, async (req, res) => {
 router.delete('/configs/:id', adminAuth, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
-    await models.Photosets.destroy({ where: { PhotosetConfigId: id } });
+    const photosetRows = await models.Photosets.findAll({ where: { PhotosetConfigId: id }, attributes: ['Id'] });
+    const photosetIds = photosetRows.map((r) => r.Id);
+    if (photosetIds.length > 0) {
+      const userPhotosetIds = await models.UserPhotosets.findAll({
+        where: { PhotosetId: photosetIds },
+        attributes: ['Id'],
+      }).then((rows) => rows.map((r) => r.Id));
+      if (userPhotosetIds.length > 0) {
+        await models.GenerationAudits.update(
+          { UserPhotosetId: null },
+          { where: { UserPhotosetId: userPhotosetIds } }
+        );
+        await models.UserPhotosets.destroy({ where: { PhotosetId: photosetIds } });
+      }
+      await models.Photosets.destroy({ where: { PhotosetConfigId: id } });
+    }
     await models.PhotosetConfigs.destroy({ where: { Id: id } });
     res.json({ ok: true });
   } catch (err) {
@@ -252,7 +267,22 @@ router.put('/presets/:id', adminAuth, async (req, res) => {
 router.delete('/presets/:id', adminAuth, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
-    await models.Photosets.destroy({ where: { PresetId: id } });
+    const photosetRows = await models.Photosets.findAll({ where: { PresetId: id }, attributes: ['Id'] });
+    const photosetIds = photosetRows.map((r) => r.Id);
+    if (photosetIds.length > 0) {
+      const userPhotosetIds = await models.UserPhotosets.findAll({
+        where: { PhotosetId: photosetIds },
+        attributes: ['Id'],
+      }).then((rows) => rows.map((r) => r.Id));
+      if (userPhotosetIds.length > 0) {
+        await models.GenerationAudits.update(
+          { UserPhotosetId: null },
+          { where: { UserPhotosetId: userPhotosetIds } }
+        );
+        await models.UserPhotosets.destroy({ where: { PhotosetId: photosetIds } });
+      }
+      await models.Photosets.destroy({ where: { PresetId: id } });
+    }
     await models.Presets.destroy({ where: { Id: id } });
     res.json({ ok: true });
   } catch (err) {
@@ -283,6 +313,18 @@ router.post('/links', adminAuth, async (req, res) => {
 router.delete('/links/:id', adminAuth, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
+    // Photosets is referenced by UserPhotosets; UserPhotosets by GenerationAudits. Delete in FK order.
+    const userPhotosetIds = await models.UserPhotosets.findAll({
+      where: { PhotosetId: id },
+      attributes: ['Id'],
+    }).then((rows) => rows.map((r) => r.Id));
+    if (userPhotosetIds.length > 0) {
+      await models.GenerationAudits.update(
+        { UserPhotosetId: null },
+        { where: { UserPhotosetId: userPhotosetIds } }
+      );
+      await models.UserPhotosets.destroy({ where: { PhotosetId: id } });
+    }
     await models.Photosets.destroy({ where: { Id: id } });
     res.json({ ok: true });
   } catch (err) {
