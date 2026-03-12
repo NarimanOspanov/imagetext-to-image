@@ -1232,6 +1232,7 @@ function registerHandlers(bot, options = {}) {
     'Каждая картинка стоит нам реальных денег 💸\n' +
     'Но мы сделали цену в разы ниже, чем у других —\n' +
     'чтобы ты мог творить без ограничений по оплате 🎨\n\n' +
+    '🤝 Приведи друга — за каждого приглашённого друга тебе начислят бонусные генерации. Поделись ссылкой из раздела «Бонусы за друзей» (/referrals).\n\n' +
     '💎 Подключи Alexa Premium и получи:\n' +
     '• без ограничений по оплате и пробуй всё, что приходит в голову\n' +
     '• HD-качество и точность\n' +
@@ -1240,7 +1241,10 @@ function registerHandlers(bot, options = {}) {
     'и всё это — дешевле чашки кофе ☕️';
   const noGenerationsReplyMarkup = {
     reply_markup: {
-      inline_keyboard: [[{ text: 'Докупить генерации 🏆', callback_data: 'pay_menu' }]],
+      inline_keyboard: [
+        [{ text: '🤝 Приведи друга', callback_data: 'pay_referrals' }],
+        [{ text: 'Докупить генерации 🏆', callback_data: 'pay_menu' }],        
+      ],
     },
   };
 
