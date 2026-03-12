@@ -9,12 +9,14 @@ import definePreset from './Preset.js';
 import definePhotosetConfig from './PhotosetConfig.js';
 import definePhotoset from './Photoset.js';
 import defineUserPhotoset from './UserPhotoset.js';
+import defineConfig from './Config.js';
 
 /**
  * Initialize code-first models and associations. Call with the shared Sequelize instance.
  */
 export function initModels(sequelize) {
   const User = defineUser(sequelize);
+  const Config = defineConfig(sequelize);
   const UserImageGeneration = defineUserImageGeneration(sequelize);
   const GenerationAudit = defineGenerationAudit(sequelize);
   const Pricing = definePricing(sequelize);
@@ -86,5 +88,7 @@ export function initModels(sequelize) {
     PhotosetConfigs: PhotosetConfig,
     Photosets: Photoset,
     UserPhotosets: UserPhotoset,
+    Config,
+    Configs: Config,
   };
 }

@@ -187,6 +187,7 @@ async function removeUserFullyByChatId(chatId) {
     deleted.userImageGenerations = await models.UserImageGenerations.destroy(whereUserId);
     deleted.userPurchases = await models.UserPurchases.destroy(whereUserId);
     deleted.telegramPayments = await models.TelegramPayments.destroy(whereUserId);
+    // Remove user from Referrals: rows where they invited others + where they were invited
     deleted.referralsAsReferrer = await models.Referrals.destroy(whereReferrer);
     deleted.referralsAsReferred = await models.Referrals.destroy(whereReferred);
     deleted.userPhotosets = await models.UserPhotosets.destroy(whereUserId);
@@ -239,13 +240,24 @@ async function getGeminiModelForUser(chatId) {
 
 const INITIAL_FREE_GENERATIONS = 20;
 
+/** Get integer config value by key (e.g. GenerationsPerReferral). Returns defaultVal if missing. */
+async function getConfigInt(key, defaultVal = 0) {
+  try {
+    const row = await models.Configs?.findOne({ where: { Keys: key } });
+    return row != null ? (row.Value ?? defaultVal) : defaultVal;
+  } catch {
+    return defaultVal;
+  }
+}
+
 /** Total generations available: free (new user) + referral bonuses (unused) + purchase balance. */
 async function getAvailableGenerations(chatId) {
   try {
     const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
     if (!user) return { total: 0, fromFree: 0, fromReferrals: 0, fromPurchases: 0, totalEver: 0 };
+    const generationsPerReferral = Math.max(1, await getConfigInt('GenerationsPerReferral', 1));
     const fromFree = Math.max(0, user.FreeGenerationsRemaining ?? 0);
-    const [fromReferrals, referralTotalCount, purchases] = await Promise.all([
+    const [referralCount, referralTotalCount, purchases] = await Promise.all([
       models.Referrals.count({ where: { ReferrerUserId: user.Id, BonusUsed: false } }),
       models.Referrals.count({ where: { ReferrerUserId: user.Id } }),
       models.UserPurchases.findAll({
@@ -254,10 +266,11 @@ async function getAvailableGenerations(chatId) {
         attributes: ['Id', 'BalanceRemaining', 'GenerationsIncluded'],
       }),
     ]);
+    const fromReferrals = referralCount * generationsPerReferral;
     const fromPurchases = purchases.reduce((s, p) => s + (p.BalanceRemaining || 0), 0);
     const totalEver =
       INITIAL_FREE_GENERATIONS +
-      referralTotalCount +
+      referralTotalCount * generationsPerReferral +
       purchases.reduce((s, p) => s + (p.GenerationsIncluded || 0), 0);
     return {
       total: fromFree + fromReferrals + fromPurchases,
@@ -300,18 +313,20 @@ async function consumeGenerations(chatId, count) {
       await t.commit();
       return true;
     }
+    const generationsPerReferral = Math.max(1, await getConfigInt('GenerationsPerReferral', 1));
     const referralRows = await models.Referrals.findAll({
       where: { ReferrerUserId: user.Id, BonusUsed: false },
       order: [['Id', 'ASC']],
-      limit: left,
       lock: t.LOCK.UPDATE,
       transaction: t,
     });
-    for (const row of referralRows) {
-      if (left <= 0) break;
-      await row.update({ BonusUsed: true }, { transaction: t });
-      left--;
+    const fromReferrals = referralRows.length * generationsPerReferral;
+    const takeFromReferrals = Math.min(left, fromReferrals);
+    const rowsToMark = Math.ceil(takeFromReferrals / generationsPerReferral);
+    for (let i = 0; i < rowsToMark && i < referralRows.length; i++) {
+      await referralRows[i].update({ BonusUsed: true }, { transaction: t });
     }
+    left -= takeFromReferrals;
     if (left > 0) {
       const purchases = await models.UserPurchases.findAll({
         where: { UserId: user.Id },
@@ -371,8 +386,14 @@ function registerHandlers(bot, options = {}) {
       // Referral: start=REFERRER_TELEGRAM_CHAT_ID means this user was referred
       if (startPayload && /^\d+$/.test(startPayload)) {
         if (String(chatId) !== startPayload) {
+          const referrerChatIdNum = Number(startPayload);
           const referrer = await models.Users.findOne({
-            where: { TelegramChatId: startPayload },
+            where: {
+              [Op.or]: [
+                { TelegramChatId: startPayload },
+                ...(Number.isSafeInteger(referrerChatIdNum) ? [{ TelegramChatId: referrerChatIdNum }] : []),
+              ],
+            },
           });
           if (referrer && referrer.Id !== user.Id) {
             const [ref] = await models.Referrals.findOrCreate({
@@ -385,7 +406,18 @@ function registerHandlers(bot, options = {}) {
               },
             });
             if (ref && ref.isNewRecord) {
-              // Optional: notify referrer about new referral
+              const perRef = Math.max(1, await getConfigInt('GenerationsPerReferral', 1));
+              const refGenWord = perRef === 1 ? 'генерацию' : (perRef >= 2 && perRef <= 4 ? 'генерации' : 'генераций');
+              // Coerce to number so Telegram API gets a serializable chat_id (BigInt would break JSON)
+              const referrerChatId = Number(referrer.TelegramChatId) || String(referrer.TelegramChatId);
+              const celebration =
+                `🎉 По вашей ссылке зарегистрировался друг!\n\n` +
+                `✨ Вам начислено +${perRef} ${refGenWord} — можно создавать изображения прямо сейчас. Спасибо, что приглашаете!`;
+              try {
+                await ctx.telegram.sendMessage(referrerChatId, celebration);
+              } catch (e) {
+                console.error('Notify referrer error:', e?.response?.body ?? e?.message ?? e);
+              }
             }
           }
         }
@@ -397,9 +429,16 @@ function registerHandlers(bot, options = {}) {
           const displayName = username ? `@${username}` : `(id: ${chatId})`;
           const text = `🆕 New user: ${displayName}\nTotal users: ${totalUsers}`;
           for (const adminId of ADMIN_CHAT_IDS) {
-            await ctx.telegram.sendMessage(adminId, text).catch((e) =>
-              console.error('Admin notify error:', e)
-            );
+            const chatIdForApi = Number(adminId) || adminId;
+            try {
+              await ctx.telegram.sendMessage(chatIdForApi, text);
+            } catch (e) {
+              if (e?.response?.description === 'Bad Request: chat not found') {
+                console.warn(`Admin notify: chat ${adminId} not found (admin must start the bot first or may have blocked it).`);
+              } else {
+                console.error('Admin notify error:', e?.response?.body ?? e?.message ?? e);
+              }
+            }
           }
         } catch (err) {
           console.error('Admin notify error:', err);
@@ -673,7 +712,7 @@ function registerHandlers(bot, options = {}) {
         `✅ User ${targetChatId} fully removed.\n` +
           `Deleted: User(1), GenerationAudits(${d.generationAudits ?? 0}), UserImageGenerations(${d.userImageGenerations ?? 0}), ` +
           `UserPurchases(${d.userPurchases ?? 0}), TelegramPayments(${d.telegramPayments ?? 0}), ` +
-          `Referrals(${(d.referralsAsReferrer ?? 0) + (d.referralsAsReferred ?? 0)}), UserPhotosets(${d.userPhotosets ?? 0}).`
+          `Referrals(as referrer + as referred: ${(d.referralsAsReferrer ?? 0) + (d.referralsAsReferred ?? 0)}), UserPhotosets(${d.userPhotosets ?? 0}).`
       );
     } else {
       await ctx.reply(`❌ Failed: ${result.error}`);
@@ -1070,10 +1109,11 @@ function registerHandlers(bot, options = {}) {
       if (ctx.callbackQuery) await ctx.answerCbQuery();
       const chatId = ctx.chat?.id;
     const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
+    const generationsPerReferral = Math.max(1, await getConfigInt('GenerationsPerReferral', 1));
     const invited = user
       ? await models.Referrals.count({ where: { ReferrerUserId: user.Id } })
       : 0;
-    const bonusesReceived = invited;
+    const bonusesReceived = invited * generationsPerReferral;
     const referralLink =
       botUsername && chatId
         ? `https://t.me/${botUsername}?start=${chatId}`
@@ -1081,12 +1121,13 @@ function registerHandlers(bot, options = {}) {
     const REFERRAL_TEMPLATE =
       'Попробуй Alexa — оживляет фото в видео 🎬✨ Мне понравилось!';
     const switchQuery = `${referralLink}\n${REFERRAL_TEMPLATE}`.slice(0, 256);
+    const genWord = generationsPerReferral === 1 ? 'генерацию' : (generationsPerReferral >= 2 && generationsPerReferral <= 4 ? 'генерации' : 'генераций');
     const text =
-      '🤝 Приглашай друзей — получай +1 генерацию за каждого!\n\n' +
+      `🤝 Приглашай друзей — получай +${generationsPerReferral} ${genWord} за каждого!\n\n` +
       'Хочешь больше генераций бесплатно? Просто приглашай друзей 👋\n\n' +
       'Твоя реферальная программа:\n' +
-      `👥 Приглашено: ${invited}\n` +
-      `🎁 Получено бонусов: ${bonusesReceived}\n\n` +
+      `👥 Приглашено друзей: ${invited}\n` +
+      `🎁 Получено бонусных генераций: ${bonusesReceived}\n\n` +
       'Ваша персональная ссылка:\n' +
       referralLink;
       await ctx.reply(text, {
