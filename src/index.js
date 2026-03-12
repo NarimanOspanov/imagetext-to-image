@@ -464,12 +464,12 @@ function registerHandlers(bot, options = {}) {
       await ctx.reply('Выбери удобный способ оплаты ниже 👇', {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '🎉 Докупить генерации', callback_data: 'pay_show_packages' }],
             [
-              { text: 'Оплатить в боте', callback_data: 'pay_in_bot' },
+              { text: '🤝 Пригласить друзей и получить бонусы', callback_data: 'pay_referrals' }
+            ],
+            [
               { text: 'Оплатить звездами ⭐', callback_data: 'pay_stars_show' },
             ],
-            [{ text: '🤝 Пригласить друзей и получить бонусы', callback_data: 'pay_referrals' }],
           ],
         },
       });
@@ -870,12 +870,12 @@ function registerHandlers(bot, options = {}) {
       {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '🎉 Докупить генерации', callback_data: 'pay_show_packages' }],
             [
-              { text: 'Оплатить в боте', callback_data: 'pay_in_bot' },
+              { text: '🤝 Пригласить друзей и получить бонусы', callback_data: 'pay_referrals' }
+            ],
+            [
               { text: 'Оплатить звездами ⭐', callback_data: 'pay_stars_show' },
             ],
-            [{ text: '🤝 Пригласить друзей и получить бонусы', callback_data: 'pay_referrals' }],
           ],
         },
       }
@@ -893,12 +893,12 @@ function registerHandlers(bot, options = {}) {
       await ctx.reply('Выбери удобный способ оплаты ниже 👇', {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '🎉 Докупить генерации', callback_data: 'pay_show_packages' }],
             [
-              { text: 'Оплатить в боте', callback_data: 'pay_in_bot' },
+              { text: '🤝 Пригласить друзей и получить бонусы', callback_data: 'pay_referrals' }
+            ],
+            [
               { text: 'Оплатить звездами ⭐', callback_data: 'pay_stars_show' },
             ],
-            [{ text: '🤝 Пригласить друзей и получить бонусы', callback_data: 'pay_referrals' }],
           ],
         },
       });
