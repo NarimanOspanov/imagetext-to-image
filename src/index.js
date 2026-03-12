@@ -516,7 +516,7 @@ function registerHandlers(bot, options = {}) {
             [{ text: '💳 Как оплатить?', callback_data: 'help_how_to_pay' }],
             [{ text: '❗ Не открывается оплата', callback_data: 'help_payment_not_open' }],
             [{ text: '⚙️ Как сменить модель', callback_data: 'help_change_model' }],
-            [{ text: 'Остались вопросы? ➢', url: 'https://t.me/asich' }],
+            [{ text: 'Остались вопросы? ➢', url: 'https://t.me/great_future' }],
           ],
         },
       };
@@ -563,7 +563,7 @@ function registerHandlers(bot, options = {}) {
   bot.action('help_payment_not_open', async (ctx) => {
     await ctx.answerCbQuery();
     await ctx.reply(
-      'Если окно оплаты не открывается, попробуй обновить приложение Telegram или оплатить с другого устройства. Если проблема сохраняется — напиши нам: @asich'
+      'Если окно оплаты не открывается, попробуй обновить приложение Telegram или оплатить с другого устройства. Если проблема сохраняется — напиши нам: @great_future'
     );
   });
 
