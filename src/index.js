@@ -158,6 +158,49 @@ async function updateGenerationAuditError(auditId, errorDetails) {
   );
 }
 
+/**
+ * Admin-only: fully remove a user by Telegram chatId from all tables.
+ * Deletes in FK-safe order. Returns { ok: true, deleted: {...} } or { ok: false, error: string }.
+ */
+async function removeUserFullyByChatId(chatId) {
+  const t = await sequelize.transaction();
+  try {
+    const user = await models.Users.findOne({
+      where: { TelegramChatId: String(chatId) },
+      transaction: t,
+    });
+    if (!user) {
+      await t.rollback();
+      return { ok: false, error: 'User not found' };
+    }
+    const userId = user.Id;
+
+    const deleted = {};
+    const whereUserId = { where: { UserId: userId }, transaction: t };
+    const whereReferrer = { where: { ReferrerUserId: userId }, transaction: t };
+    const whereReferred = { where: { ReferredUserId: userId }, transaction: t };
+
+    deleted.generationAudits = await models.GenerationAudits.destroy({
+      where: { [Op.or]: [{ UserId: userId }, { TelegramChatId: String(chatId) }] },
+      transaction: t,
+    });
+    deleted.userImageGenerations = await models.UserImageGenerations.destroy(whereUserId);
+    deleted.userPurchases = await models.UserPurchases.destroy(whereUserId);
+    deleted.telegramPayments = await models.TelegramPayments.destroy(whereUserId);
+    deleted.referralsAsReferrer = await models.Referrals.destroy(whereReferrer);
+    deleted.referralsAsReferred = await models.Referrals.destroy(whereReferred);
+    deleted.userPhotosets = await models.UserPhotosets.destroy(whereUserId);
+    deleted.user = await models.Users.destroy({ where: { Id: userId }, transaction: t });
+
+    await t.commit();
+    return { ok: true, deleted };
+  } catch (err) {
+    await t.rollback();
+    console.error('removeUserFullyByChatId error:', err);
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}
+
 /** Start typing indicator in chat; returns stop() to clear the interval. */
 function startTyping(telegram, chatId) {
   telegram.sendChatAction(chatId, 'typing').catch(() => {});
@@ -610,6 +653,31 @@ function registerHandlers(bot, options = {}) {
         inline_keyboard: [[{ text: '🔧 Открыть Admin Panel', web_app: { url: appUrl } }]],
       },
     });
+  });
+
+  // —— Admin: fully remove user by chatId from all tables ——
+  bot.command('removeuser', async (ctx) => {
+    const adminChatId = String(ctx.chat?.id);
+    if (!ADMIN_CHAT_IDS.includes(adminChatId)) return;
+    const text = ctx.message?.text?.trim() || '';
+    const match = text.match(/^\/removeuser\s+(\S+)$/i);
+    const targetChatId = match?.[1];
+    if (!targetChatId) {
+      await ctx.reply('Usage: /removeuser <chatId>\nExample: /removeuser 123456789');
+      return;
+    }
+    const result = await removeUserFullyByChatId(targetChatId);
+    if (result.ok) {
+      const d = result.deleted;
+      await ctx.reply(
+        `✅ User ${targetChatId} fully removed.\n` +
+          `Deleted: User(1), GenerationAudits(${d.generationAudits ?? 0}), UserImageGenerations(${d.userImageGenerations ?? 0}), ` +
+          `UserPurchases(${d.userPurchases ?? 0}), TelegramPayments(${d.telegramPayments ?? 0}), ` +
+          `Referrals(${(d.referralsAsReferrer ?? 0) + (d.referralsAsReferred ?? 0)}), UserPhotosets(${d.userPhotosets ?? 0}).`
+      );
+    } else {
+      await ctx.reply(`❌ Failed: ${result.error}`);
+    }
   });
 
   // —— Photosets: show presets-based photoshoot ideas and create photoset ——
