@@ -482,9 +482,9 @@ function registerHandlers(bot, options = {}) {
       const replyMarkup = {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '🖼 Хочу красивую картинку', callback_data: 'start_want_picture' }]
-            ,
-            [{ text: '💎 Посмотреть идеи', url: 'https://t.me/rabota_5g' }],
+            [{ text: '📸 Выбрать фотосессию', callback_data: 'start_photosets' }],
+            [{ text: '🖼 Сделать красивую картинку', callback_data: 'start_want_picture' }],
+            [{ text: '💎 Посмотреть идеи на канале', url: 'https://t.me/rabota_5g' }],
           ],
         },
       };
@@ -499,6 +499,11 @@ function registerHandlers(bot, options = {}) {
     } finally {
       stopTyping();
     }
+  });
+
+  bot.action('start_photosets', async (ctx) => {
+    await ctx.answerCbQuery();
+    await sendPhotosetCard(ctx, null);
   });
 
   bot.action('start_want_picture', async (ctx) => {
