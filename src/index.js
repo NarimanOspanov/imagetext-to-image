@@ -238,8 +238,6 @@ async function getGeminiModelForUser(chatId) {
   return resolveGeminiModelId(active);
 }
 
-const INITIAL_FREE_GENERATIONS = 20;
-
 /** Get integer config value by key (e.g. GenerationsPerReferral). Returns defaultVal if missing. */
 async function getConfigInt(key, defaultVal = 0) {
   try {
@@ -250,14 +248,19 @@ async function getConfigInt(key, defaultVal = 0) {
   }
 }
 
+/** Initial free generations for new users (from Config.GenerationsPerRegistration). */
+async function getGenerationsPerRegistration() {
+  return Math.max(0, await getConfigInt('GenerationsPerRegistration', 5));
+}
+
 /** Total generations available: free (new user) + referral bonuses (unused) + purchase balance. */
 async function getAvailableGenerations(chatId) {
   try {
     const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
     if (!user) return { total: 0, fromFree: 0, fromReferrals: 0, fromPurchases: 0, totalEver: 0 };
-    const generationsPerReferral = Math.max(1, await getConfigInt('GenerationsPerReferral', 1));
-    const fromFree = Math.max(0, user.FreeGenerationsRemaining ?? 0);
-    const [referralCount, referralTotalCount, purchases] = await Promise.all([
+    const [generationsPerReferral, initialFree, referralCount, referralTotalCount, purchases] = await Promise.all([
+      getConfigInt('GenerationsPerReferral', 1).then((v) => Math.max(1, v)),
+      getGenerationsPerRegistration(),
       models.Referrals.count({ where: { ReferrerUserId: user.Id, BonusUsed: false } }),
       models.Referrals.count({ where: { ReferrerUserId: user.Id } }),
       models.UserPurchases.findAll({
@@ -266,10 +269,11 @@ async function getAvailableGenerations(chatId) {
         attributes: ['Id', 'BalanceRemaining', 'GenerationsIncluded'],
       }),
     ]);
+    const fromFree = Math.max(0, user.FreeGenerationsRemaining ?? 0);
     const fromReferrals = referralCount * generationsPerReferral;
     const fromPurchases = purchases.reduce((s, p) => s + (p.BalanceRemaining || 0), 0);
     const totalEver =
-      INITIAL_FREE_GENERATIONS +
+      initialFree +
       referralTotalCount * generationsPerReferral +
       purchases.reduce((s, p) => s + (p.GenerationsIncluded || 0), 0);
     return {
@@ -369,10 +373,12 @@ function registerHandlers(bot, options = {}) {
       const wasNew = !user;
       if (!user) {
         try {
+          const initialFree = await getGenerationsPerRegistration();
           user = await models.Users.create({
             TelegramChatId: chatId,
             TelegramUserName: username,
             DateJoined: Sequelize.literal('GETUTCDATE()'),
+            FreeGenerationsRemaining: initialFree,
           });
         } catch (createErr) {
           if (createErr?.name === 'SequelizeUniqueConstraintError') {
@@ -476,7 +482,8 @@ function registerHandlers(bot, options = {}) {
       const replyMarkup = {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '🖼 Хочу красивую картинку', callback_data: 'start_want_picture' }],
+            [{ text: '🖼 Хочу красивую картинку', callback_data: 'start_want_picture' }]
+            ,
             [{ text: '💎 Посмотреть идеи', url: 'https://t.me/rabota_5g' }],
           ],
         },
@@ -516,7 +523,7 @@ function registerHandlers(bot, options = {}) {
             [{ text: '💳 Как оплатить?', callback_data: 'help_how_to_pay' }],
             [{ text: '❗ Не открывается оплата', callback_data: 'help_payment_not_open' }],
             [{ text: '⚙️ Как сменить модель', callback_data: 'help_change_model' }],
-            [{ text: 'Остались вопросы? ➢', url: 'https://t.me/great_future' }],
+            [{ text: 'Остались вопросы? ➢', url: 'https://t.me/greate_future' }],
           ],
         },
       };
@@ -661,11 +668,13 @@ function registerHandlers(bot, options = {}) {
       let user = await models.Users.findOne({ where: { TelegramChatId: ctx.chat.id } });
     if (!user) {
       try {
+        const initialFree = await getGenerationsPerRegistration();
         user = await models.Users.create({
           TelegramChatId: ctx.chat.id,
           TelegramUserName: ctx.from?.username ?? null,
           DateJoined: Sequelize.literal('GETUTCDATE()'),
           ActiveModel: modelId,
+          FreeGenerationsRemaining: initialFree,
         });
       } catch (e) {
         if (e?.name === 'SequelizeUniqueConstraintError') {
@@ -839,10 +848,12 @@ function registerHandlers(bot, options = {}) {
       let user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
       if (!user) {
         try {
+          const initialFree = await getGenerationsPerRegistration();
           user = await models.Users.create({
             TelegramChatId: chatId,
             TelegramUserName: ctx.from?.username ?? null,
             DateJoined: Sequelize.literal('GETUTCDATE()'),
+            FreeGenerationsRemaining: initialFree,
           });
         } catch (e) {
           if (e?.name === 'SequelizeUniqueConstraintError') {
@@ -1181,10 +1192,12 @@ function registerHandlers(bot, options = {}) {
     let user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
     if (!user) {
       try {
+        const initialFree = await getGenerationsPerRegistration();
         user = await models.Users.create({
           TelegramChatId: chatId,
           TelegramUserName: ctx.from?.username ?? null,
           DateJoined: Sequelize.literal('GETUTCDATE()'),
+          FreeGenerationsRemaining: initialFree,
         });
       } catch (e) {
         if (e?.name === 'SequelizeUniqueConstraintError') {
@@ -1339,10 +1352,12 @@ function registerHandlers(bot, options = {}) {
       let user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
       if (!user) {
         try {
+          const initialFree = await getGenerationsPerRegistration();
           user = await models.Users.create({
             TelegramChatId: chatId,
             TelegramUserName: ctx.from?.username ?? null,
             DateJoined: Sequelize.literal('GETUTCDATE()'),
+            FreeGenerationsRemaining: initialFree,
           });
         } catch (e) {
           if (e?.name === 'SequelizeUniqueConstraintError') {
