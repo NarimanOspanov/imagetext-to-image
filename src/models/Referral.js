@@ -33,6 +33,11 @@ export default function defineReferral(sequelize) {
         allowNull: false,
         defaultValue: false,
       },
+      ReferrerNotifiedAt: {
+        type: DataTypes.DATE,
+        allowNull: true,
+        comment: 'When we sent the "friend registered" message to the referrer',
+      },
     },
     {
       tableName: 'Referrals',

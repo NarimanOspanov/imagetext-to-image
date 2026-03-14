@@ -412,41 +412,39 @@ function registerHandlers(bot, options = {}) {
         await user.update({ Promocode: resolvedPromocode.Code });
       }
 
-      // Referral: start=REFERRER_TELEGRAM_CHAT_ID means this user was referred
-      if (startPayload && /^\d+$/.test(startPayload)) {
-        if (String(chatId) !== startPayload) {
-          const referrerChatIdNum = Number(startPayload);
-          const referrer = await models.Users.findOne({
-            where: {
-              [Op.or]: [
-                { TelegramChatId: startPayload },
-                ...(Number.isSafeInteger(referrerChatIdNum) ? [{ TelegramChatId: referrerChatIdNum }] : []),
-              ],
+      // Referral: start=REFERRER_TELEGRAM_CHAT_ID — invited user is already registered above; link them and notify referrer
+      if (startPayload && /^\d+$/.test(startPayload) && String(chatId) !== startPayload) {
+        const referrerChatIdNum = Number(startPayload);
+        let referrer = null;
+        if (Number.isSafeInteger(referrerChatIdNum)) {
+          referrer = await models.Users.findOne({ where: { TelegramChatId: referrerChatIdNum } });
+        }
+        if (!referrer) {
+          referrer = await models.Users.findOne({ where: { TelegramChatId: startPayload } });
+        }
+        if (referrer && referrer.Id !== user.Id) {
+          const [ref] = await models.Referrals.findOrCreate({
+            where: { ReferrerUserId: referrer.Id, ReferredUserId: user.Id },
+            defaults: {
+              ReferrerUserId: referrer.Id,
+              ReferredUserId: user.Id,
+              ReferredAt: new Date(),
+              BonusUsed: false,
             },
           });
-          if (referrer && referrer.Id !== user.Id) {
-            const [ref] = await models.Referrals.findOrCreate({
-              where: { ReferrerUserId: referrer.Id, ReferredUserId: user.Id },
-              defaults: {
-                ReferrerUserId: referrer.Id,
-                ReferredUserId: user.Id,
-                ReferredAt: new Date(),
-                BonusUsed: false,
-              },
-            });
-            if (ref && ref.isNewRecord) {
+          const notYetNotified = ref.isNewRecord || ref.ReferrerNotifiedAt == null;
+          if (ref && notYetNotified) {
+            try {
               const perRef = Math.max(1, await getConfigInt('GenerationsPerReferral', 1));
               const refGenWord = perRef === 1 ? 'генерацию' : (perRef >= 2 && perRef <= 4 ? 'генерации' : 'генераций');
-              // Coerce to number so Telegram API gets a serializable chat_id (BigInt would break JSON)
               const referrerChatId = Number(referrer.TelegramChatId) || String(referrer.TelegramChatId);
               const celebration =
                 `🎉 По вашей ссылке зарегистрировался друг!\n\n` +
                 `✨ Вам начислено +${perRef} ${refGenWord} — можно создавать изображения прямо сейчас. Спасибо, что приглашаете!`;
-              try {
-                await ctx.telegram.sendMessage(referrerChatId, celebration);
-              } catch (e) {
-                console.error('Notify referrer error:', e?.response?.body ?? e?.message ?? e);
-              }
+              await ctx.telegram.sendMessage(referrerChatId, celebration);
+              await ref.update({ ReferrerNotifiedAt: new Date() }).catch(() => {});
+            } catch (e) {
+              console.error('Notify referrer error:', e?.response?.body ?? e?.message ?? e);
             }
           }
         }
