@@ -5,6 +5,7 @@ import definePricing from './Pricing.js';
 import defineUserPurchase from './UserPurchase.js';
 import defineTelegramPayment from './TelegramPayment.js';
 import defineReferral from './Referral.js';
+import definePromoCode from './PromoCode.js';
 import definePreset from './Preset.js';
 import definePhotosetConfig from './PhotosetConfig.js';
 import definePhotoset from './Photoset.js';
@@ -23,6 +24,7 @@ export function initModels(sequelize) {
   const UserPurchase = defineUserPurchase(sequelize);
   const TelegramPayment = defineTelegramPayment(sequelize);
   const Referral = defineReferral(sequelize);
+  const PromoCode = definePromoCode(sequelize);
   const Preset = definePreset(sequelize);
   const PhotosetConfig = definePhotosetConfig(sequelize);
   const Photoset = definePhotoset(sequelize);
@@ -51,6 +53,9 @@ export function initModels(sequelize) {
   Referral.belongsTo(User, { as: 'Referrer', foreignKey: 'ReferrerUserId' });
   User.hasMany(Referral, { foreignKey: 'ReferredUserId' });
   Referral.belongsTo(User, { as: 'Referred', foreignKey: 'ReferredUserId' });
+
+  User.hasMany(PromoCode, { foreignKey: 'OwnerUserId' });
+  PromoCode.belongsTo(User, { as: 'Owner', foreignKey: 'OwnerUserId' });
 
   PhotosetConfig.hasMany(Photoset, { foreignKey: 'PhotosetConfigId' });
   Photoset.belongsTo(PhotosetConfig, { foreignKey: 'PhotosetConfigId' });
@@ -84,6 +89,7 @@ export function initModels(sequelize) {
     UserPurchases: UserPurchase,
     TelegramPayments: TelegramPayment,
     Referrals: Referral,
+    PromoCodes: PromoCode,
     Presets: Preset,
     PhotosetConfigs: PhotosetConfig,
     Photosets: Photoset,

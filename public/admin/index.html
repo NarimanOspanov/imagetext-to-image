@@ -149,6 +149,7 @@
   <nav class="tabs">
     <button class="tab active" data-tab="photosets">📸 Фотосеты</button>
     <button class="tab" data-tab="presets">✏️ Промпты</button>
+    <button class="tab" data-tab="promocodes">🎟 Промокоды</button>
   </nav>
   <main class="content" id="content"></main>
   <button class="fab" id="fab" title="Создать">+</button>
@@ -221,6 +222,36 @@
   <div class="sheet-body" id="link-list"></div>
 </div>
 
+<!-- Sheet: Create/Edit Promocode -->
+<div class="sheet" id="sheet-promo">
+  <div class="sheet-handle"></div>
+  <div class="sheet-header">
+    <span class="sheet-title" id="sheet-promo-title">Новый промокод</span>
+    <button class="sheet-close" onclick="editingPromoId=null;closeSheet('sheet-promo')">✕</button>
+  </div>
+  <div class="sheet-body">
+    <div class="field">
+      <label>Код (латиница, без пробелов)</label>
+      <input id="promo-code" type="text" placeholder="Например: PARTNER1" maxlength="50" />
+      <div class="field-hint" style="font-size:12px;color:var(--hint);margin-top:4px">Ссылка: t.me/бот?start=promo_<strong id="promo-code-preview">CODE</strong></div>
+    </div>
+    <div class="field">
+      <label>Название / метка (необязательно)</label>
+      <input id="promo-label" type="text" placeholder="Партнёр или кампания" />
+    </div>
+    <div class="field">
+      <label>Бесплатных генераций при регистрации</label>
+      <input id="promo-initial" type="number" min="0" placeholder="Пусто = по умолчанию" />
+      <div class="field-hint" style="font-size:12px;color:var(--hint);margin-top:4px">Сколько генераций дать новому пользователю по этой ссылке. Оставьте пустым для глобального значения.</div>
+    </div>
+    <div class="field">
+      <label>ID владельца (User Id, необязательно)</label>
+      <input id="promo-owner" type="number" placeholder="Числовой Id пользователя" />
+    </div>
+    <button class="btn-primary" id="btn-submit-promo" onclick="submitPromo()">Создать промокод</button>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -244,6 +275,8 @@
   let prImageFileName = null;
   let editingConfigId = null;   // null = create mode, number = edit mode
   let editingPresetId = null;   // null = create mode, number = edit mode
+  let promocodes = [];
+  let editingPromoId = null;    // null = create, number = edit
 
   // ── API ───────────────────────────────────────────────────────────────────
   const BASE = '/api/admin';
@@ -264,13 +297,15 @@
   }
 
   async function loadAll() {
-    const [cfgs, prs, bi] = await Promise.all([
+    const [cfgs, prs, promos, bi] = await Promise.all([
       api('GET', '/configs'),
       api('GET', '/presets'),
+      api('GET', '/promocodes').catch(() => []),
       fetch('/api/admin/bot-info').then(r => r.json()).catch(() => ({ botUsername: '' })),
     ]);
     configs = cfgs;
     presets = prs;
+    promocodes = Array.isArray(promos) ? promos : [];
     botUsername = bi.botUsername || '';
   }
 
@@ -313,8 +348,10 @@
   document.getElementById('fab').addEventListener('click', () => {
     if (activeTab === 'photosets') {
       openPhotosetSheet(null);
-    } else {
+    } else if (activeTab === 'presets') {
       openPresetSheet(null);
+    } else if (activeTab === 'promocodes') {
+      openPromoSheet(null);
     }
   });
 
@@ -594,6 +631,99 @@
     showToast('Ссылка скопирована ✓', 'success');
   }
 
+  // ── Promocode ─────────────────────────────────────────────────────────────
+  function promoDeepLink(code) {
+    if (!botUsername || !code) return null;
+    return `https://t.me/${botUsername}?start=promo_${encodeURIComponent(code)}`;
+  }
+
+  function copyPromoLink(code) {
+    const link = promoDeepLink(code);
+    if (!link) { showToast('Имя бота ещё не загружено', 'error'); return; }
+    copyText(link);
+    showToast('Ссылка скопирована ✓', 'success');
+  }
+
+  function openPromoSheet(promo) {
+    editingPromoId = promo ? promo.Id : null;
+    document.getElementById('promo-code').value = promo ? promo.Code : '';
+    document.getElementById('promo-label').value = promo ? (promo.Label || '') : '';
+    document.getElementById('promo-initial').value = promo && promo.InitialGenerations != null ? String(promo.InitialGenerations) : '';
+    document.getElementById('promo-owner').value = promo && promo.OwnerUserId != null ? String(promo.OwnerUserId) : '';
+    document.getElementById('promo-code').disabled = !!promo;
+    document.getElementById('sheet-promo-title').textContent = promo ? 'Редактировать промокод' : 'Новый промокод';
+    document.getElementById('btn-submit-promo').textContent = promo ? 'Сохранить' : 'Создать промокод';
+    updatePromoCodePreview();
+    openSheet('sheet-promo');
+  }
+
+  document.getElementById('promo-code').addEventListener('input', updatePromoCodePreview);
+  function updatePromoCodePreview() {
+    const v = (document.getElementById('promo-code').value || '').trim().replace(/\s+/g, '_') || 'CODE';
+    document.getElementById('promo-code-preview').textContent = v;
+  }
+
+  async function submitPromo() {
+    const codeRaw = (document.getElementById('promo-code').value || '').trim().replace(/\s+/g, '_');
+    const label = (document.getElementById('promo-label').value || '').trim() || null;
+    const initialStr = (document.getElementById('promo-initial').value || '').trim();
+    const initialGenerations = initialStr === '' ? null : Math.max(0, parseInt(initialStr, 10) || 0);
+    const ownerStr = (document.getElementById('promo-owner').value || '').trim();
+    const ownerUserId = ownerStr === '' ? null : parseInt(ownerStr, 10) || null;
+
+    if (!codeRaw) { showToast('Введите код промокода', 'error'); return; }
+
+    const btn = document.getElementById('btn-submit-promo');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>';
+    try {
+      if (editingPromoId) {
+        const updated = await api('PUT', `/promocodes/${editingPromoId}`, {
+          label: label || '',
+          ownerUserId: ownerUserId != null ? ownerUserId : '',
+          initialGenerations: initialGenerations != null ? initialGenerations : '',
+        });
+        const idx = promocodes.findIndex(p => p.Id === editingPromoId);
+        if (idx !== -1) promocodes[idx] = { ...promocodes[idx], ...updated };
+        closeSheet('sheet-promo');
+        render();
+        showToast('Промокод обновлён ✓', 'success');
+      } else {
+        const row = await api('POST', '/promocodes', {
+          code: codeRaw,
+          label: label || '',
+          ownerUserId: ownerUserId != null ? ownerUserId : '',
+          initialGenerations: initialGenerations != null ? initialGenerations : '',
+        });
+        promocodes.unshift({ ...row, usedCount: 0 });
+        closeSheet('sheet-promo');
+        render();
+        const link = promoDeepLink(row.Code);
+        if (link) { copyText(link); showToast('Промокод создан ✓ — ссылка скопирована', 'success'); }
+        else { showToast('Промокод создан ✓', 'success'); }
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = editingPromoId ? 'Сохранить' : 'Создать промокод';
+    }
+  }
+
+  async function deletePromo(id) {
+    const promo = promocodes.find(p => p.Id === id);
+    if (!promo) return;
+    if (!confirm(`Удалить промокод «${promo.Code}»? Пользователи с этим промокодом не изменятся.`)) return;
+    try {
+      await api('DELETE', `/promocodes/${id}`);
+      promocodes = promocodes.filter(p => p.Id !== id);
+      render();
+      showToast('Промокод удалён', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
   function esc(str) {
     return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -654,6 +784,38 @@
     }).join('');
   }
 
+  function renderPromocodes() {
+    if (promocodes.length === 0) {
+      return `<div class="empty"><div class="empty-icon">🎟</div><div class="empty-text">Нет промокодов. Нажмите + чтобы создать.</div></div>`;
+    }
+    return promocodes.map(p => {
+      const link = promoDeepLink(p.Code);
+      const initialText = p.InitialGenerations != null ? `${p.InitialGenerations} ген.` : 'по умолч.';
+      const ownerText = p.Owner ? (p.Owner.TelegramUserName ? `@${p.Owner.TelegramUserName}` : `#${p.Owner.Id}`) : '—';
+      return `
+        <div class="card">
+          <div class="card-header">
+            <div class="card-info">
+              <div class="card-title">${esc(p.Code)}</div>
+              <div class="card-desc">${esc(p.Label || '—')} · Приведено: ${p.usedCount || 0} · Старт: ${initialText}</div>
+              <div style="font-size:12px;color:var(--hint);margin-top:4px">Владелец: ${esc(ownerText)}</div>
+            </div>
+            <div class="card-actions">
+              <button class="btn-icon" title="Редактировать" onclick="openPromoSheet(promocodes.find(x=>x.Id===${p.Id}))">✏️</button>
+              <button class="btn-icon" title="Копировать ссылку" onclick="copyPromoLink(${JSON.stringify(p.Code).replace(/"/g,'&quot;')})">🔗</button>
+              <button class="btn-icon danger" title="Удалить" onclick="deletePromo(${p.Id})">🗑</button>
+            </div>
+          </div>
+          ${link ? `
+          <div class="deep-link-bar">
+            <span class="deep-link-text">${esc(link)}</span>
+            <button class="btn-copy" onclick="copyPromoLink(${JSON.stringify(p.Code).replace(/"/g,'&quot;')})">Копировать</button>
+          </div>` : ''}
+        </div>
+      `;
+    }).join('');
+  }
+
   function renderPresets() {
     if (presets.length === 0) {
       return `<div class="empty"><div class="empty-icon">✏️</div><div class="empty-text">Нет промптов. Нажмите + чтобы создать.</div></div>`;
@@ -694,7 +856,10 @@
 
   function render() {
     const el = document.getElementById('content');
-    el.innerHTML = activeTab === 'photosets' ? renderPhotosets() : renderPresets();
+    if (activeTab === 'photosets') el.innerHTML = renderPhotosets();
+    else if (activeTab === 'presets') el.innerHTML = renderPresets();
+    else if (activeTab === 'promocodes') el.innerHTML = renderPromocodes();
+    else el.innerHTML = renderPhotosets();
   }
 
   // ── Boot ──────────────────────────────────────────────────────────────────

@@ -369,16 +369,34 @@ function registerHandlers(bot, options = {}) {
 
       try {
       await sequelize.authenticate();
+
+      // Resolve promocode from start=promo_CODE before creating user (for InitialGenerations)
+      let resolvedPromocode = null;
+      const promoPrefix = 'promo_';
+      if (startPayload && startPayload.toLowerCase().startsWith(promoPrefix)) {
+        const codeInput = startPayload.slice(promoPrefix.length).trim();
+        if (codeInput.length > 0) {
+          resolvedPromocode = await models.PromoCodes.findOne({
+            where: sequelize.where(sequelize.fn('LOWER', sequelize.col('Code')), Op.eq, codeInput.toLowerCase()),
+          });
+        }
+      }
+
       let user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
       const wasNew = !user;
       if (!user) {
         try {
-          const initialFree = await getGenerationsPerRegistration();
+          const defaultFree = await getGenerationsPerRegistration();
+          const initialFree =
+            resolvedPromocode?.InitialGenerations != null
+              ? Math.max(0, parseInt(resolvedPromocode.InitialGenerations, 10) || 0)
+              : defaultFree;
           user = await models.Users.create({
             TelegramChatId: chatId,
             TelegramUserName: username,
             DateJoined: Sequelize.literal('GETUTCDATE()'),
             FreeGenerationsRemaining: initialFree,
+            Promocode: resolvedPromocode ? resolvedPromocode.Code : null,
           });
         } catch (createErr) {
           if (createErr?.name === 'SequelizeUniqueConstraintError') {
@@ -387,6 +405,11 @@ function registerHandlers(bot, options = {}) {
         }
       } else if (username != null) {
         await user.update({ TelegramUserName: username });
+      }
+
+      // Promocode attribution: if existing user came via promo link and not yet attributed
+      if (resolvedPromocode && (!user.Promocode || user.Promocode === '')) {
+        await user.update({ Promocode: resolvedPromocode.Code });
       }
 
       // Referral: start=REFERRER_TELEGRAM_CHAT_ID means this user was referred

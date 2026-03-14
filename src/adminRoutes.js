@@ -333,4 +333,84 @@ router.delete('/links/:id', adminAuth, async (req, res) => {
   }
 });
 
+// ── PromoCodes (partner deeplinks: t.me/BotName?start=promo_CODE) ─────────────
+router.get('/promocodes', adminAuth, async (_req, res) => {
+  try {
+    const rows = await models.PromoCodes.findAll({
+      include: [{ model: models.Users, as: 'Owner', attributes: ['Id', 'TelegramChatId', 'TelegramUserName'] }],
+      order: [['CreatedAt', 'DESC']],
+    });
+    const withCount = await Promise.all(
+      rows.map(async (r) => {
+        const usedCount = await models.Users.count({ where: { Promocode: r.Code } });
+        return { ...r.toJSON(), usedCount };
+      })
+    );
+    res.json(withCount);
+  } catch (err) {
+    console.error('Admin GET /promocodes:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/promocodes', adminAuth, async (req, res) => {
+  try {
+    const { code, label, ownerUserId, initialGenerations } = req.body;
+    const codeStr = (code ?? '').trim().replace(/\s+/g, '_');
+    if (!codeStr || codeStr.length > 50) {
+      return res.status(400).json({ error: 'code is required (max 50 chars, no spaces)' });
+    }
+    const existing = await models.PromoCodes.findOne({ where: { Code: codeStr } });
+    if (existing) return res.status(409).json({ error: 'This promocode already exists' });
+    const initial =
+      initialGenerations != null && initialGenerations !== ''
+        ? Math.max(0, parseInt(initialGenerations, 10) || 0)
+        : null;
+    const row = await models.PromoCodes.create({
+      Code: codeStr,
+      Label: label != null && String(label).trim() !== '' ? String(label).trim() : null,
+      OwnerUserId: ownerUserId != null && ownerUserId !== '' ? parseInt(ownerUserId, 10) : null,
+      InitialGenerations: initial,
+    });
+    res.status(201).json(row);
+  } catch (err) {
+    console.error('Admin POST /promocodes:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/promocodes/:id', adminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const { label, ownerUserId, initialGenerations } = req.body;
+    const updates = {};
+    if (label !== undefined) updates.Label = label != null && String(label).trim() !== '' ? String(label).trim() : null;
+    if (ownerUserId !== undefined) updates.OwnerUserId = ownerUserId != null && ownerUserId !== '' ? parseInt(ownerUserId, 10) : null;
+    if (initialGenerations !== undefined) {
+      updates.InitialGenerations =
+        initialGenerations != null && initialGenerations !== ''
+          ? Math.max(0, parseInt(initialGenerations, 10) || 0)
+          : null;
+    }
+    if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No fields to update' });
+    await models.PromoCodes.update(updates, { where: { Id: id } });
+    const row = await models.PromoCodes.findByPk(id);
+    res.json(row);
+  } catch (err) {
+    console.error('Admin PUT /promocodes/:id:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/promocodes/:id', adminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    await models.PromoCodes.destroy({ where: { Id: id } });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Admin DELETE /promocodes/:id:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
