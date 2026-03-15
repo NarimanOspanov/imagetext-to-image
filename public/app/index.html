@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Идеи для фото</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:     var(--tg-theme-bg-color, #0d0d0f);
+      --bg2:    var(--tg-theme-secondary-bg-color, #16161a);
+      --surface: #1c1c21;
+      --text:   var(--tg-theme-text-color, #f5f5f7);
+      --hint:   var(--tg-theme-hint-color, #9898a0);
+      --accent: var(--tg-theme-button-color, #6366f1);
+      --accent-soft: rgba(99, 102, 241, 0.25);
+      --radius: 16px;
+      --radius-sm: 12px;
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+      --shadow: 0 4px 24px rgba(0,0,0,.35);
+      --shadow-hover: 0 12px 40px rgba(0,0,0,.45);
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-size: 16px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    #app {
+      min-height: 100%;
+      padding: 16px 14px calc(28px + var(--safe-bottom));
+    }
+
+    .header {
+      text-align: center;
+      padding: 12px 0 24px;
+    }
+    .header h1 {
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      background: linear-gradient(135deg, #fff 0%, #c4b5fd 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .header p {
+      font-size: 14px;
+      color: var(--hint);
+      margin-top: 8px;
+      font-weight: 500;
+    }
+
+    /* Masonry: natural image heights, no fixed aspect-ratio */
+    .masonry {
+      column-count: 2;
+      column-gap: 14px;
+    }
+    @media (min-width: 420px) {
+      .masonry { column-gap: 18px; }
+    }
+    @media (min-width: 600px) {
+      .masonry { column-count: 3; column-gap: 18px; }
+    }
+
+    .card {
+      break-inside: avoid;
+      margin-bottom: 14px;
+      background: var(--surface);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      cursor: pointer;
+      transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
+      border: 1px solid rgba(255,255,255,.06);
+    }
+    .card:hover {
+      transform: translateY(-4px) scale(1.02);
+      box-shadow: var(--shadow-hover);
+    }
+    .card:active {
+      transform: translateY(0) scale(0.98);
+      box-shadow: 0 2px 16px rgba(0,0,0,.4);
+    }
+
+    .card-img-wrap {
+      width: 100%;
+      overflow: hidden;
+      position: relative;
+      background: var(--bg2);
+    }
+    .card-img-wrap::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(to top, rgba(0,0,0,.35) 0%, transparent 50%);
+      pointer-events: none;
+    }
+    .card-img {
+      width: 100%;
+      height: auto;
+      display: block;
+      vertical-align: bottom;
+    }
+    .loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 56px 24px;
+      color: var(--hint);
+      font-weight: 500;
+    }
+    .spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid var(--surface);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+      margin-bottom: 20px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .empty {
+      text-align: center;
+      padding: 56px 24px;
+      color: var(--hint);
+      font-size: 15px;
+      font-weight: 500;
+    }
+    .error {
+      text-align: center;
+      padding: 24px;
+      color: #f87171;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header class="header">
+    <h1>Идеи для фото</h1>
+    <p>Выбери стиль — в боте отправь своё фото</p>
+  </header>
+  <div id="content"></div>
+</div>
+
+<script>
+  const tg = window.Telegram?.WebApp;
+  if (tg) {
+    tg.ready();
+    tg.expand();
+  }
+
+  const BASE = '/api/app';
+
+  async function api(path) {
+    const res = await fetch(BASE + path);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Ошибка загрузки');
+    return data;
+  }
+
+  function imageUrl(fileName) {
+    if (!fileName) return null;
+    return BASE + '/preset-image/' + encodeURIComponent(fileName);
+  }
+
+  function openPresetInBot(presetId) {
+    const botUsername = window.__botUsername;
+    if (!botUsername) {
+      if (tg) tg.showAlert('Ссылка на бота пока не готова. Попробуй через минуту.');
+      return;
+    }
+    const link = 'https://t.me/' + botUsername + '?start=preset_' + presetId;
+    if (tg?.openTelegramLink) {
+      tg.openTelegramLink(link);
+      tg.close();
+    } else {
+      window.open(link, '_blank');
+    }
+  }
+
+  function escapeHtml(str) {
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  function render(presets) {
+    const el = document.getElementById('content');
+    const withPhoto = (presets || []).filter((p) => p.Image && String(p.Image).trim());
+    if (withPhoto.length === 0) {
+      el.innerHTML = '<div class="empty">Пока нет идей с фото. Загляни позже.</div>';
+      return;
+    }
+    const shuffled = shuffle(withPhoto);
+    el.innerHTML =
+      '<div class="masonry">' +
+      shuffled.map((p) => {
+        const imgUrl = imageUrl(p.Image);
+        return (
+          '<article class="card" data-id="' + p.Id + '" role="button" tabindex="0">' +
+          '<div class="card-img-wrap">' +
+          '<img class="card-img" src="' + imgUrl + '" alt="" loading="lazy" />' +
+          '</div>' +
+          '</article>'
+        );
+      }).join('') +
+      '</div>';
+
+    el.querySelectorAll('.card').forEach((card) => {
+      const id = parseInt(card.dataset.id, 10);
+      const handler = () => openPresetInBot(id);
+      card.addEventListener('click', handler);
+      card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handler(); } });
+    });
+  }
+
+  (async () => {
+    const content = document.getElementById('content');
+    content.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка идей...</div>';
+
+    try {
+      const [presets, botInfo] = await Promise.all([
+        api('/presets'),
+        api('/bot-info').catch(() => ({ botUsername: '' })),
+      ]);
+      window.__botUsername = botInfo.botUsername || '';
+      render(presets);
+    } catch (err) {
+      content.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
+    }
+  })();
+</script>
+</body>
+</html>

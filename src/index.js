@@ -356,6 +356,8 @@ async function consumeGenerations(chatId, count) {
 
 function registerHandlers(bot, options = {}) {
   const botUsername = options.botUsername || '';
+  const appBaseUrl = (options.appBaseUrl || config.webhookUrl || '').replace(/\/$/, '');
+  const ideasAppUrl = appBaseUrl ? appBaseUrl + '/app' : '';
 
   bot.start(async (ctx) => {
     const chatId = ctx.chat?.id;
@@ -500,14 +502,16 @@ function registerHandlers(bot, options = {}) {
         'Создаю реалистичные, стильные портреты, как после съёмки у топового фотографа ✨\n\n' +
         'Загрузите фото и короткое описание образа, и я покажу вашу лучшую версию.\n\n' +
         'Выбери, что хочешь сделать';
+      const startButtons = [
+        [{ text: '📸 Выбрать фотосессию', callback_data: 'start_photosets' }],
+        [{ text: '🖼 Сделать красивую картинку', callback_data: 'start_want_picture' }],
+      ];
+      if (ideasAppUrl) {
+        startButtons.push([{ text: '✨ Идеи для фото', web_app: { url: ideasAppUrl } }]);
+      }
+      startButtons.push([{ text: '💎 Посмотреть идеи на канале', url: 'https://t.me/rabota_5g' }]);
       const replyMarkup = {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '📸 Выбрать фотосессию', callback_data: 'start_photosets' }],
-            [{ text: '🖼 Сделать красивую картинку', callback_data: 'start_want_picture' }],
-            [{ text: '💎 Посмотреть идеи на канале', url: 'https://t.me/rabota_5g' }],
-          ],
-        },
+        reply_markup: { inline_keyboard: startButtons },
       };
 
       if (existsSync(startImagePath)) {
@@ -532,6 +536,15 @@ function registerHandlers(bot, options = {}) {
     await ctx.reply('Отправь текст с описанием картинки или фото — и я создам изображение.');
   });
 
+  bot.command('ideas', async (ctx) => {
+    if (!ideasAppUrl) return ctx.reply('Идеи пока недоступны.');
+    return ctx.reply('Выбери стиль — откроется галерея. Нажми на картинку, затем отправь своё фото в боте.', {
+      reply_markup: {
+        inline_keyboard: [[{ text: '✨ Открыть идеи для фото', web_app: { url: ideasAppUrl } }]],
+      },
+    });
+  });
+
   bot.help(async (ctx) => {
     const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
     try {
@@ -540,18 +553,20 @@ function registerHandlers(bot, options = {}) {
         '📸 Просто отправь мне до 3х фото, затем описание, что с ним нужно сделать.\n\n' +
         'Загляните в наш канал, там лучшие стили и промпты:\n' +
         '[👇 Посмотреть идеи](https://t.me/rabota_5g)';
+      const helpButtons = [
+        [{ text: '🟥 Не нравится результат', callback_data: 'help_dislike_result' }],
+        [{ text: '💳 Как оплатить?', callback_data: 'help_how_to_pay' }],
+        [{ text: '❗ Не открывается оплата', callback_data: 'help_payment_not_open' }],
+        [{ text: '⚙️ Как сменить модель', callback_data: 'help_change_model' }],
+      ];
+      if (ideasAppUrl) {
+        helpButtons.push([{ text: '✨ Идеи для фото', web_app: { url: ideasAppUrl } }]);
+      }
+      helpButtons.push([{ text: 'Остались вопросы? ➢', url: 'https://t.me/greate_future' }]);
       const replyMarkup = {
         parse_mode: 'Markdown',
         disable_web_page_preview: true,
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '🟥 Не нравится результат', callback_data: 'help_dislike_result' }],
-            [{ text: '💳 Как оплатить?', callback_data: 'help_how_to_pay' }],
-            [{ text: '❗ Не открывается оплата', callback_data: 'help_payment_not_open' }],
-            [{ text: '⚙️ Как сменить модель', callback_data: 'help_change_model' }],
-            [{ text: 'Остались вопросы? ➢', url: 'https://t.me/greate_future' }],
-          ],
-        },
+        reply_markup: { inline_keyboard: helpButtons },
       };
       return await ctx.reply(text, replyMarkup);
     } finally {
@@ -1705,6 +1720,41 @@ async function main() {
   app.get('/api/admin/bot-info', (_req, res) => res.json({ botUsername: runtimeBotUsername }));
   app.use('/admin', express.static(join(__dirname, '..', 'public', 'admin')));
 
+  // ── User Mini App: ideas gallery (presets), public API ─────────────────────
+  app.get('/api/app/bot-info', (_req, res) => res.json({ botUsername: runtimeBotUsername }));
+  app.get('/api/app/presets', async (_req, res) => {
+    try {
+      const rows = await models.Presets.findAll({
+        where: { [Op.and]: [{ Image: { [Op.ne]: null } }, { Image: { [Op.ne]: '' } }] },
+        order: [['Id', 'ASC']],
+        attributes: ['Id', 'Prompt', 'Image'],
+      });
+      res.json(rows);
+    } catch (err) {
+      console.error('GET /api/app/presets:', err);
+      res.status(500).json({ error: 'Failed to load presets' });
+    }
+  });
+  app.get('/api/app/preset-image/:fileName', async (req, res) => {
+    try {
+      const connStr = config.azureStorageConnectionString;
+      if (!connStr) return res.status(503).send('Storage not configured');
+      const client = BlobServiceClient.fromConnectionString(connStr);
+      const container = client.getContainerClient(config.azureStorageContainer);
+      const fileName = req.params.fileName;
+      const blobName = fileName.startsWith('PresetImages/') ? fileName : `PresetImages/${fileName}`;
+      const blob = container.getBlockBlobClient(blobName);
+      const download = await blob.download(0);
+      res.set('Content-Type', download.contentType || 'image/jpeg');
+      res.set('Cache-Control', 'public, max-age=86400');
+      download.readableStreamBody.pipe(res);
+    } catch (err) {
+      console.error('App preset-image proxy:', err?.message);
+      res.status(404).send('Not found');
+    }
+  });
+  app.use('/app', express.static(join(__dirname, '..', 'public', 'app')));
+
   await new Promise((resolve) => app.listen(port, resolve));
   console.log('HTTP server listening on port', port);
 
@@ -1737,7 +1787,8 @@ async function main() {
     return;
   }
 
-  registerHandlers(bot, { botUsername });
+  const appBaseUrl = (process.env.ADMIN_APP_URL || config.webhookUrl || '').replace(/\/$/, '');
+  registerHandlers(bot, { botUsername, appBaseUrl });
 
   // Set menu commands (shown when user taps Menu in bottom-left; emoji = icon next to command)
   const menuCommands = [
@@ -1747,6 +1798,7 @@ async function main() {
     { command: 'pay', description: '💎 Докупить генерации' },
     { command: 'referrals', description: '🎁 Бонусы за друзей' },
     { command: 'photosets', description: '📸 Готовые фотосеты' },
+    { command: 'ideas', description: '✨ Идеи для фото' },
     { command: 'help', description: '❓ Помощь' },
   ];
   try {
