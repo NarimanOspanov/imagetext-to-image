@@ -205,7 +205,27 @@
     return a;
   }
 
-  function render(presets) {
+  function loadImageDimensions(url) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      const timeout = setTimeout(() => {
+        img.onload = null;
+        img.onerror = null;
+        resolve({ w: 4, h: 5 });
+      }, 8000);
+      img.onload = () => {
+        clearTimeout(timeout);
+        resolve({ w: img.naturalWidth || 4, h: img.naturalHeight || 5 });
+      };
+      img.onerror = () => {
+        clearTimeout(timeout);
+        resolve({ w: 4, h: 5 });
+      };
+      img.src = url;
+    });
+  }
+
+  function render(presets, dimensions) {
     const el = document.getElementById('content');
     const withPhoto = (presets || []).filter((p) => p.Image && String(p.Image).trim());
     if (withPhoto.length === 0) {
@@ -217,10 +237,11 @@
       '<div class="masonry">' +
       shuffled.map((p) => {
         const imgUrl = imageUrl(p.Image);
+        const d = dimensions[p.Id] || { w: 4, h: 5 };
         return (
           '<article class="card" data-id="' + p.Id + '" role="button" tabindex="0">' +
           '<div class="card-img-wrap">' +
-          '<img class="card-img" src="' + imgUrl + '" alt="" loading="lazy" />' +
+          '<img class="card-img" src="' + imgUrl + '" alt="" width="' + d.w + '" height="' + d.h + '" loading="lazy" />' +
           '</div>' +
           '</article>'
         );
@@ -245,7 +266,22 @@
         api('/bot-info').catch(() => ({ botUsername: '' })),
       ]);
       window.__botUsername = botInfo.botUsername || '';
-      render(presets);
+
+      const withPhoto = (presets || []).filter((p) => p.Image && String(p.Image).trim());
+      if (withPhoto.length === 0) {
+        content.innerHTML = '<div class="empty">Пока нет идей с фото. Загляни позже.</div>';
+        return;
+      }
+
+      const dimensions = {};
+      await Promise.all(
+        withPhoto.map(async (p) => {
+          const url = imageUrl(p.Image);
+          const d = await loadImageDimensions(url);
+          dimensions[p.Id] = d;
+        })
+      );
+      render(presets, dimensions);
     } catch (err) {
       content.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
     }
