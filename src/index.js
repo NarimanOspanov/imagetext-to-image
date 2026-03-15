@@ -562,7 +562,7 @@ function registerHandlers(bot, options = {}) {
       if (ideasAppUrl) {
         helpButtons.push([{ text: '✨ Идеи для фото', web_app: { url: ideasAppUrl } }]);
       }
-      helpButtons.push([{ text: 'Остались вопросы? ➢', url: 'https://t.me/greate_future' }]);
+      helpButtons.push([{ text: 'Остались вопросы? ➢', url: 'https://t.me/nariman_ovv' }]);
       const replyMarkup = {
         parse_mode: 'Markdown',
         disable_web_page_preview: true,
@@ -1085,7 +1085,7 @@ function registerHandlers(bot, options = {}) {
       '◆ Забудь про обработку: идеальный свет и кожа на каждом кадре\n' +
       '◆ Выгляди на миллион: премиальные образы без затрат на стилистов\n' +
       '◆ Разовая оплата, без подписок и автоматических списаний\n\n' +
-      'Осуществляя платеж с использованием платежного сервиса, вы соглашаетесь с условиями оферты. Сделать возврат можно написав в поддержку @greate_future';
+      'Осуществляя платеж с использованием платежного сервиса, вы соглашаетесь с условиями оферты. Сделать возврат можно написав в поддержку @nariman_ovv';
       const buttons = pricings.map((p) => [
         {
           text: `${p.GenerationsCount} генераций – ${p.PriceInStars} ⭐${p.PriceUSD ? ` (~${p.PriceUSD} USD)` : ''}`,
