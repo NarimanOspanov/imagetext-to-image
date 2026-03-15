@@ -744,6 +744,18 @@ function registerHandlers(bot, options = {}) {
     });
   });
 
+  // —— Stats: hidden command for founders; opens Mini App with graphs ——
+  bot.command('stat', async (ctx) => {
+    const chatId = String(ctx.chat?.id);
+    if (!ADMIN_CHAT_IDS.includes(chatId)) return;
+    const appUrl = `${(process.env.ADMIN_APP_URL || config.webhookUrl).replace(/\/$/, '')}/stat`;
+    await ctx.reply('Statistics', {
+      reply_markup: {
+        inline_keyboard: [[{ text: 'Open Stats', web_app: { url: appUrl } }]],
+      },
+    });
+  });
+
   // —— Admin: fully remove user by chatId from all tables ——
   bot.command('removeuser', async (ctx) => {
     const adminChatId = String(ctx.chat?.id);
@@ -1719,6 +1731,7 @@ async function main() {
   app.use('/api/admin', express.json({ limit: '20mb' }), adminRouter);
   app.get('/api/admin/bot-info', (_req, res) => res.json({ botUsername: runtimeBotUsername }));
   app.use('/admin', express.static(join(__dirname, '..', 'public', 'admin')));
+  app.use('/stat', express.static(join(__dirname, '..', 'public', 'stat')));
 
   // ── User Mini App: ideas gallery (presets), public API ─────────────────────
   app.get('/api/app/bot-info', (_req, res) => res.json({ botUsername: runtimeBotUsername }));

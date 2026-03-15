@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Statistics</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:     var(--tg-theme-bg-color, #ffffff);
+      --bg2:    var(--tg-theme-secondary-bg-color, #f2f2f7);
+      --text:   var(--tg-theme-text-color, #000000);
+      --hint:   var(--tg-theme-hint-color, #8e8e93);
+      --accent: var(--tg-theme-button-color, #007aff);
+      --border: rgba(0,0,0,.10);
+      --radius: 14px;
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg2);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-size: 16px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    #app {
+      display: flex;
+      flex-direction: column;
+      min-height: 100%;
+      padding: 0 0 calc(20px + var(--safe-bottom));
+    }
+
+    .header {
+      background: var(--bg);
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .header h1 { font-size: 18px; font-weight: 700; }
+
+    .period-tabs {
+      display: flex;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      padding: 0 8px;
+    }
+    .period-tab {
+      flex: 1;
+      padding: 12px 8px;
+      background: none;
+      border: none;
+      color: var(--hint);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: color .2s, border-color .2s;
+    }
+    .period-tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
+    .content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+    }
+
+    .chart-card {
+      background: var(--bg);
+      border-radius: var(--radius);
+      box-shadow: 0 2px 12px rgba(0,0,0,.08);
+      margin-bottom: 16px;
+      padding: 14px;
+    }
+    .chart-card h3 {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--hint);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      margin-bottom: 4px;
+    }
+    .chart-total {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+    .chart-wrap {
+      position: relative;
+      height: 180px;
+    }
+    .chart-wrap canvas { max-height: 180px; }
+
+    .loading, .error {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--hint);
+    }
+    .error { color: #ff3b30; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header class="header">
+    <h1>Statistics</h1>
+  </header>
+  <div class="period-tabs">
+    <button type="button" class="period-tab active" data-period="7d">7 days</button>
+    <button type="button" class="period-tab" data-period="30d">30 days</button>
+    <button type="button" class="period-tab" data-period="90d">90 days</button>
+  </div>
+  <div class="content" id="content">
+    <div class="loading" id="loading">Loading…</div>
+    <div id="charts" style="display: none;"></div>
+  </div>
+</div>
+
+<script>
+  const tg = window.Telegram?.WebApp;
+  if (tg) {
+    tg.ready();
+    tg.expand();
+  }
+  const INIT_DATA = tg?.initData || '';
+
+  let period = '30d';
+  let chartInstances = [];
+
+  function getOpts() {
+    return { headers: { 'x-init-data': INIT_DATA } };
+  }
+
+  async function fetchStats(p) {
+    const res = await fetch('/api/admin/stats?period=' + encodeURIComponent(p), getOpts());
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to load stats');
+    return data;
+  }
+
+  function sum(series, key) {
+    return (series || []).reduce((s, row) => s + (row[key] || 0), 0);
+  }
+
+  function destroyCharts() {
+    chartInstances.forEach((c) => c.destroy());
+    chartInstances = [];
+  }
+
+  const chartColors = [
+    'rgb(0, 122, 255)',
+    'rgb(52, 199, 89)',
+    'rgb(255, 149, 0)',
+    'rgb(255, 59, 48)',
+  ];
+
+  function renderCharts(data) {
+    destroyCharts();
+    const series = data.series || [];
+    const labels = series.map((r) => r.date);
+    const container = document.getElementById('charts');
+    container.style.display = 'block';
+    container.innerHTML = '';
+
+    const metrics = [
+      { key: 'generations', title: 'Photo generations', color: chartColors[0] },
+      { key: 'usersJoined', title: 'Users joined', color: chartColors[1] },
+      { key: 'usersByInvite', title: 'Users by invite', color: chartColors[2] },
+      { key: 'payments', title: 'Payments', color: chartColors[3] },
+    ];
+
+    metrics.forEach((m) => {
+      const total = sum(series, m.key);
+      const card = document.createElement('div');
+      card.className = 'chart-card';
+      card.innerHTML =
+        '<h3>' + m.title + '</h3>' +
+        '<div class="chart-total">' + total + '</div>' +
+        '<div class="chart-wrap"><canvas></canvas></div>';
+      container.appendChild(card);
+
+      const canvas = card.querySelector('canvas');
+      const ctx = canvas.getContext('2d');
+      const chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: m.title,
+            data: series.map((r) => r[m.key]),
+            borderColor: m.color,
+            backgroundColor: m.color.replace('rgb', 'rgba').replace(')', ', 0.15)'),
+            fill: true,
+            tension: 0.2,
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+          },
+          scales: {
+            x: {
+              ticks: { maxTicksLimit: 8, font: { size: 10 } },
+              grid: { display: false },
+            },
+            y: {
+              beginAtZero: true,
+              ticks: { font: { size: 10 } },
+            },
+          },
+        },
+      });
+      chartInstances.push(chart);
+    });
+  }
+
+  async function load() {
+    const loadingEl = document.getElementById('loading');
+    const chartsEl = document.getElementById('charts');
+    loadingEl.style.display = 'block';
+    loadingEl.textContent = 'Loading…';
+    chartsEl.style.display = 'none';
+    try {
+      const data = await fetchStats(period);
+      loadingEl.style.display = 'none';
+      renderCharts(data);
+    } catch (err) {
+      loadingEl.style.display = 'block';
+      loadingEl.textContent = err.message || 'Error';
+      loadingEl.className = 'loading error';
+    }
+  }
+
+  document.querySelectorAll('.period-tab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      period = btn.dataset.period;
+      document.querySelectorAll('.period-tab').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      load();
+    });
+  });
+
+  load();
+</script>
+</body>
+</html>

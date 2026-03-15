@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { createHmac, randomUUID } from 'node:crypto';
 import { BlobServiceClient } from '@azure/storage-blob';
 import { config } from './config.js';
-import { models } from './db.js';
+import { sequelize, models } from './db.js';
 
 const router = Router();
 
@@ -86,6 +86,74 @@ router.get('/storage-config', adminAuth, (_req, res) => {
       ? `https://${accountName}.blob.core.windows.net/${config.azureStorageContainer}`
       : null,
   });
+});
+
+// ── Founder stats (per-period aggregates for Mini App) ────────────────────────
+router.get('/stats', adminAuth, async (req, res) => {
+  try {
+    const period = (req.query.period || '30d').toString().toLowerCase();
+    const days = period === '7d' ? 7 : period === '90d' ? 90 : 30;
+    const now = new Date();
+    const startDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - days, 0, 0, 0, 0));
+
+    const dates = [];
+    for (let d = new Date(startDate); d <= now; d.setUTCDate(d.getUTCDate() + 1)) {
+      dates.push(d.toISOString().slice(0, 10));
+    }
+
+    const seriesByDate = {};
+    dates.forEach((d) => {
+      seriesByDate[d] = { date: d, generations: 0, usersJoined: 0, usersByInvite: 0, payments: 0 };
+    });
+
+    const startStr = startDate.toISOString().slice(0, 19).replace('T', ' ');
+
+    const [genRows] = await sequelize.query(
+      `SELECT CONVERT(DATE, GeneratedAt) AS d, COUNT(*) AS c FROM [dbo].[UserImageGenerations] WHERE GeneratedAt >= :start GROUP BY CONVERT(DATE, GeneratedAt)`,
+      { replacements: { start: startStr } }
+    );
+    (genRows || []).forEach((r) => {
+      const d = r.d instanceof Date ? r.d.toISOString().slice(0, 10) : String(r.d).slice(0, 10);
+      if (seriesByDate[d]) seriesByDate[d].generations = Number(r.c) || 0;
+    });
+
+    const [userRows] = await sequelize.query(
+      `SELECT CONVERT(DATE, DateJoined) AS d, COUNT(*) AS c FROM [dbo].[Users] WHERE DateJoined >= :start GROUP BY CONVERT(DATE, DateJoined)`,
+      { replacements: { start: startStr } }
+    );
+    (userRows || []).forEach((r) => {
+      const d = r.d instanceof Date ? r.d.toISOString().slice(0, 10) : String(r.d).slice(0, 10);
+      if (seriesByDate[d]) seriesByDate[d].usersJoined = Number(r.c) || 0;
+    });
+
+    // Exclude referrals where the referrer is the admin (chatId 5934959951) so stats show only real invites
+    const [refRows] = await sequelize.query(
+      `SELECT CONVERT(DATE, ReferredAt) AS d, COUNT(*) AS c FROM [dbo].[Referrals] r
+       WHERE r.ReferredAt >= :start
+         AND r.ReferrerUserId NOT IN (SELECT Id FROM [dbo].[Users] WHERE TelegramChatId = 5934959951)
+       GROUP BY CONVERT(DATE, r.ReferredAt)`,
+      { replacements: { start: startStr } }
+    );
+    (refRows || []).forEach((r) => {
+      const d = r.d instanceof Date ? r.d.toISOString().slice(0, 10) : String(r.d).slice(0, 10);
+      if (seriesByDate[d]) seriesByDate[d].usersByInvite = Number(r.c) || 0;
+    });
+
+    const [payRows] = await sequelize.query(
+      `SELECT CONVERT(DATE, PurchasedAt) AS d, COUNT(*) AS c FROM [dbo].[UserPurchases] WHERE PurchasedAt >= :start GROUP BY CONVERT(DATE, PurchasedAt)`,
+      { replacements: { start: startStr } }
+    );
+    (payRows || []).forEach((r) => {
+      const d = r.d instanceof Date ? r.d.toISOString().slice(0, 10) : String(r.d).slice(0, 10);
+      if (seriesByDate[d]) seriesByDate[d].payments = Number(r.c) || 0;
+    });
+
+    const series = dates.map((d) => seriesByDate[d]);
+    res.json({ period: period === '7d' ? '7d' : period === '90d' ? '90d' : '30d', series });
+  } catch (err) {
+    console.error('Admin GET /stats:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Cover image proxy ─────────────────────────────────────────────────────────
