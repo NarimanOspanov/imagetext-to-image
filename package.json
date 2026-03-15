@@ -8,7 +8,8 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "db:migrate": "sequelize-cli db:migrate",
-    "db:seed": "sequelize-cli db:seed:all"
+    "db:seed": "sequelize-cli db:seed:all",
+    "backfill:preset-categories": "node scripts/backfill-preset-categories.js"
   },
   "engines": {
     "node": ">=20.0.0"

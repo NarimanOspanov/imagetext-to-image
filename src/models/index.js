@@ -11,6 +11,10 @@ import definePhotosetConfig from './PhotosetConfig.js';
 import definePhotoset from './Photoset.js';
 import defineUserPhotoset from './UserPhotoset.js';
 import defineConfig from './Config.js';
+import defineAudience from './Audience.js';
+import defineTheme from './Theme.js';
+import definePresetAudience from './PresetAudience.js';
+import definePresetTheme from './PresetTheme.js';
 
 /**
  * Initialize code-first models and associations. Call with the shared Sequelize instance.
@@ -29,6 +33,10 @@ export function initModels(sequelize) {
   const PhotosetConfig = definePhotosetConfig(sequelize);
   const Photoset = definePhotoset(sequelize);
   const UserPhotoset = defineUserPhotoset(sequelize);
+  const Audience = defineAudience(sequelize);
+  const Theme = defineTheme(sequelize);
+  const PresetAudience = definePresetAudience(sequelize);
+  const PresetTheme = definePresetTheme(sequelize);
 
   User.hasMany(UserImageGeneration, { foreignKey: 'UserId' });
   UserImageGeneration.belongsTo(User, { foreignKey: 'UserId' });
@@ -70,6 +78,28 @@ export function initModels(sequelize) {
   UserPhotoset.hasMany(GenerationAudit, { foreignKey: 'UserPhotosetId' });
   GenerationAudit.belongsTo(UserPhotoset, { foreignKey: 'UserPhotosetId' });
 
+  Preset.belongsToMany(Audience, {
+    through: PresetAudience,
+    foreignKey: 'PresetId',
+    otherKey: 'AudienceId',
+  });
+  Audience.belongsToMany(Preset, {
+    through: PresetAudience,
+    foreignKey: 'AudienceId',
+    otherKey: 'PresetId',
+  });
+  Preset.belongsToMany(Theme, {
+    through: PresetTheme,
+    foreignKey: 'PresetId',
+    otherKey: 'ThemeId',
+  });
+  Theme.belongsToMany(Preset, {
+    through: PresetTheme,
+    foreignKey: 'ThemeId',
+    otherKey: 'PresetId',
+  });
+  Theme.belongsTo(Theme, { as: 'Parent', foreignKey: 'ParentId' });
+
   return {
     User,
     UserImageGeneration,
@@ -94,6 +124,10 @@ export function initModels(sequelize) {
     PhotosetConfigs: PhotosetConfig,
     Photosets: Photoset,
     UserPhotosets: UserPhotoset,
+    Audience,
+    Theme,
+    Audiences: Audience,
+    Themes: Theme,
     Config,
     Configs: Config,
   };

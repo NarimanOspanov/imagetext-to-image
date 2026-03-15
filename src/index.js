@@ -1722,12 +1722,72 @@ async function main() {
 
   // ── User Mini App: ideas gallery (presets), public API ─────────────────────
   app.get('/api/app/bot-info', (_req, res) => res.json({ botUsername: runtimeBotUsername }));
-  app.get('/api/app/presets', async (_req, res) => {
+  app.get('/api/app/audiences', async (_req, res) => {
     try {
+      const rows = await models.Audiences.findAll({
+        order: [['SortOrder', 'ASC'], ['Id', 'ASC']],
+        attributes: ['Id', 'Name', 'SortOrder'],
+      });
+      res.json(rows.map((r) => ({ id: r.Id, name: r.Name, sortOrder: r.SortOrder })));
+    } catch (err) {
+      console.error('GET /api/app/audiences:', err);
+      res.status(500).json({ error: 'Failed to load audiences' });
+    }
+  });
+  app.get('/api/app/themes', async (_req, res) => {
+    try {
+      const rows = await models.Themes.findAll({
+        order: [['SortOrder', 'ASC'], ['Id', 'ASC']],
+        attributes: ['Id', 'Name', 'ParentId', 'SortOrder'],
+      });
+      res.json(
+        rows.map((r) => ({ id: r.Id, name: r.Name, parentId: r.ParentId, sortOrder: r.SortOrder }))
+      );
+    } catch (err) {
+      console.error('GET /api/app/themes:', err);
+      res.status(500).json({ error: 'Failed to load themes' });
+    }
+  });
+  app.get('/api/app/presets', async (req, res) => {
+    try {
+      const audienceParam = (req.query.audience || '').toString().trim();
+      const themeParam = (req.query.theme || '').toString().trim();
+      const audienceIds = audienceParam
+        ? audienceParam.split(',').map((s) => parseInt(s, 10)).filter((n) => Number.isInteger(n) && n > 0)
+        : [];
+      const themeIds = themeParam
+        ? themeParam.split(',').map((s) => parseInt(s, 10)).filter((n) => Number.isInteger(n) && n > 0)
+        : [];
+
+      const baseWhere = {
+        [Op.and]: [{ Image: { [Op.ne]: null } }, { Image: { [Op.ne]: '' } }],
+      };
+      const include = [];
+      if (audienceIds.length > 0) {
+        include.push({
+          model: models.Audiences,
+          where: { Id: { [Op.in]: audienceIds } },
+          required: true,
+          attributes: [],
+          through: { attributes: [] },
+        });
+      }
+      if (themeIds.length > 0) {
+        include.push({
+          model: models.Themes,
+          where: { Id: { [Op.in]: themeIds } },
+          required: true,
+          attributes: [],
+          through: { attributes: [] },
+        });
+      }
+
       const rows = await models.Presets.findAll({
-        where: { [Op.and]: [{ Image: { [Op.ne]: null } }, { Image: { [Op.ne]: '' } }] },
+        where: baseWhere,
+        include: include.length > 0 ? include : undefined,
         order: [['Id', 'ASC']],
         attributes: ['Id', 'Prompt', 'Image'],
+        distinct: true,
       });
       res.json(rows);
     } catch (err) {

@@ -141,14 +141,58 @@
       color: #f87171;
       font-size: 14px;
     }
+
+    .filters {
+      margin-bottom: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .filter-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .filter-row label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--hint);
+    }
+    .filter-select {
+      width: 100%;
+      padding: 10px 12px;
+      font-size: 15px;
+      font-family: inherit;
+      color: var(--text);
+      background: var(--surface);
+      border: 1px solid rgba(255,255,255,.15);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%239898a0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10l-5 5z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      padding-right: 36px;
+    }
+    .filter-select:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .filter-select option {
+      background: var(--surface);
+      color: var(--text);
+    }
+    .filter-select option[value=""] {
+      color: var(--hint);
+    }
   </style>
 </head>
 <body>
 <div id="app">
   <header class="header">
     <h1>Идеи для фото</h1>
-    <p>Выбери стиль — в боте отправь своё фото</p>
   </header>
+  <div id="filters"></div>
   <div id="content"></div>
 </div>
 
@@ -161,11 +205,25 @@
 
   const BASE = '/api/app';
 
+  let audiences = [];
+  let themes = [];
+  let selectedAudienceId = '';
+  let selectedThemeId = '';
+  let dimensionsCache = {};
+
   async function api(path) {
     const res = await fetch(BASE + path);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Ошибка загрузки');
     return data;
+  }
+
+  function buildPresetsQuery() {
+    const params = new URLSearchParams();
+    if (selectedAudienceId) params.set('audience', String(selectedAudienceId));
+    if (selectedThemeId) params.set('theme', String(selectedThemeId));
+    const q = params.toString();
+    return q ? '/presets?' + q : '/presets';
   }
 
   function imageUrl(fileName) {
@@ -225,19 +283,79 @@
     });
   }
 
+  function renderFilters() {
+    const el = document.getElementById('filters');
+    if (!audiences.length && !themes.length) {
+      el.innerHTML = '';
+      return;
+    }
+    const parentThemes = themes.filter((t) => t.parentId == null);
+    const childThemes = themes.filter((t) => t.parentId != null);
+
+    let html = '<div class="filters">';
+
+    if (audiences.length) {
+      html += '<div class="filter-row"><label for="filter-audience">Для кого</label><select id="filter-audience" class="filter-select">';
+      html += '<option value="">Все категории</option>';
+      audiences.forEach((a) => {
+        const sel = selectedAudienceId === a.id ? ' selected' : '';
+        html += '<option value="' + a.id + '"' + sel + '>' + escapeHtml(a.name) + '</option>';
+      });
+      html += '</select></div>';
+    }
+
+    if (themes.length) {
+      html += '<div class="filter-row"><label for="filter-theme">Тематика</label><select id="filter-theme" class="filter-select">';
+      html += '<option value="">Все категории</option>';
+      parentThemes.forEach((parent) => {
+        const children = childThemes.filter((c) => c.parentId === parent.id);
+        if (children.length === 0) return;
+        html += '<optgroup label="' + escapeHtml(parent.name) + '">';
+        children.forEach((t) => {
+          const sel = selectedThemeId === t.id ? ' selected' : '';
+          html += '<option value="' + t.id + '"' + sel + '>' + escapeHtml(t.name) + '</option>';
+        });
+        html += '</optgroup>';
+      });
+      html += '</select></div>';
+    }
+
+    html += '</div>';
+    el.innerHTML = html;
+
+    const audienceSelect = document.getElementById('filter-audience');
+    const themeSelect = document.getElementById('filter-theme');
+    if (audienceSelect) {
+      audienceSelect.addEventListener('change', () => {
+        const v = audienceSelect.value;
+        selectedAudienceId = v ? parseInt(v, 10) : '';
+        fetchPresetsAndRender();
+      });
+    }
+    if (themeSelect) {
+      themeSelect.addEventListener('change', () => {
+        const v = themeSelect.value;
+        selectedThemeId = v ? parseInt(v, 10) : '';
+        fetchPresetsAndRender();
+      });
+    }
+  }
+
   function render(presets, dimensions) {
     const el = document.getElementById('content');
     const withPhoto = (presets || []).filter((p) => p.Image && String(p.Image).trim());
     if (withPhoto.length === 0) {
-      el.innerHTML = '<div class="empty">Пока нет идей с фото. Загляни позже.</div>';
+      const hasFilters = selectedAudienceId || selectedThemeId;
+      el.innerHTML = '<div class="empty">' + (hasFilters ? 'Нет идей по выбранным фильтрам.' : 'Пока нет идей с фото. Загляни позже.') + '</div>';
       return;
     }
     const shuffled = shuffle(withPhoto);
+    const dims = dimensions || dimensionsCache;
     el.innerHTML =
       '<div class="masonry">' +
       shuffled.map((p) => {
         const imgUrl = imageUrl(p.Image);
-        const d = dimensions[p.Id] || { w: 4, h: 5 };
+        const d = dims[p.Id] || { w: 4, h: 5 };
         return (
           '<article class="card" data-id="' + p.Id + '" role="button" tabindex="0">' +
           '<div class="card-img-wrap">' +
@@ -256,29 +374,54 @@
     });
   }
 
+  async function fetchPresetsAndRender() {
+    const content = document.getElementById('content');
+    content.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка идей...</div>';
+    try {
+      const presets = await api(buildPresetsQuery());
+      const withPhoto = (presets || []).filter((p) => p.Image && String(p.Image).trim());
+      const idsToLoad = withPhoto.filter((p) => !dimensionsCache[p.Id]).map((p) => p.Id);
+      for (const id of idsToLoad) {
+        const p = presets.find((x) => x.Id === id);
+        if (p && p.Image) {
+          const d = await loadImageDimensions(imageUrl(p.Image));
+          dimensionsCache[id] = d;
+        }
+      }
+      render(presets, dimensionsCache);
+    } catch (err) {
+      content.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
+    }
+  }
+
   (async () => {
     const content = document.getElementById('content');
     content.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка идей...</div>';
 
     try {
-      const [presets, botInfo] = await Promise.all([
+      const [presets, botInfo, audiencesRes, themesRes] = await Promise.all([
         api('/presets'),
         api('/bot-info').catch(() => ({ botUsername: '' })),
+        api('/audiences').catch(() => []),
+        api('/themes').catch(() => []),
       ]);
       window.__botUsername = botInfo.botUsername || '';
+      audiences = Array.isArray(audiencesRes) ? audiencesRes : [];
+      themes = Array.isArray(themesRes) ? themesRes : [];
 
+      renderFilters();
       const withPhoto = (presets || []).filter((p) => p.Image && String(p.Image).trim());
       if (withPhoto.length === 0) {
         content.innerHTML = '<div class="empty">Пока нет идей с фото. Загляни позже.</div>';
         return;
       }
-
       const dimensions = {};
       await Promise.all(
         withPhoto.map(async (p) => {
           const url = imageUrl(p.Image);
           const d = await loadImageDimensions(url);
           dimensions[p.Id] = d;
+          dimensionsCache[p.Id] = d;
         })
       );
       render(presets, dimensions);
