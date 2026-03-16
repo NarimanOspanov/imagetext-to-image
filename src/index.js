@@ -1166,13 +1166,13 @@ function registerHandlers(bot, options = {}) {
       stopTyping();
     }
   });
-  // —— Referral program: stats, personal link, "Invite friend" (switch_inline_query) ——
+  // —— Referral program: stats, personal link, "Invite friend" (t.me/share url) ——
   async function sendReferralScreen(ctx) {
     const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
     try {
       if (ctx.callbackQuery) await ctx.answerCbQuery();
       const chatId = ctx.chat?.id;
-    const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
+      const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
     const generationsPerReferral = Math.max(1, await getConfigInt('GenerationsPerReferral', 1));
     const invited = user
       ? await models.Referrals.count({ where: { ReferrerUserId: user.Id } })
@@ -1183,8 +1183,12 @@ function registerHandlers(bot, options = {}) {
         ? `https://t.me/${botUsername}?start=${chatId}`
         : '(настрой BOT_USERNAME)';
     const REFERRAL_TEMPLATE =
-      'Попробуй Alexa — оживляет фото в видео 🎬✨ Мне понравилось!';
-    const switchQuery = `${referralLink}\n${REFERRAL_TEMPLATE}`.slice(0, 256);
+      'Привет\nЕсли хочешь сделать фотосессию через искусственный интеллект, рекомендую этого бота. В ссылке промокод на бесплатные генерации';
+    // Телеграм сам подставляет ссылку из параметра url в первую строку сообщения,
+    // поэтому в text отправляем только описание, без повторной ссылки.
+    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(
+      referralLink
+    )}&text=${encodeURIComponent(REFERRAL_TEMPLATE)}`;
     const genWord = generationsPerReferral === 1 ? 'генерацию' : (generationsPerReferral >= 2 && generationsPerReferral <= 4 ? 'генерации' : 'генераций');
     const text =
       `🤝 Приглашай друзей — получай +${generationsPerReferral} ${genWord} за каждого!\n\n` +
@@ -1194,6 +1198,7 @@ function registerHandlers(bot, options = {}) {
       `🎁 Получено бонусных генераций: ${bonusesReceived}\n\n` +
       'Ваша персональная ссылка:\n' +
       referralLink;
+
       await ctx.reply(text, {
         disable_web_page_preview: true,
         reply_markup: {
@@ -1201,7 +1206,7 @@ function registerHandlers(bot, options = {}) {
             [
               {
                 text: '🔥 Пригласить друга',
-                switch_inline_query: switchQuery,
+                url: shareUrl,
               },
             ],
           ],
