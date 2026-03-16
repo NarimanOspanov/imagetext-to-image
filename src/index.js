@@ -386,6 +386,7 @@ function registerHandlers(bot, options = {}) {
 
       let user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
       const wasNew = !user;
+      let promoBonus = 0;
       if (!user) {
         try {
           const defaultFree = await getGenerationsPerRegistration();
@@ -393,6 +394,7 @@ function registerHandlers(bot, options = {}) {
             resolvedPromocode?.InitialGenerations != null
               ? Math.max(0, parseInt(resolvedPromocode.InitialGenerations, 10) || 0)
               : defaultFree;
+          promoBonus = Math.max(0, initialFree - defaultFree);
           user = await models.Users.create({
             TelegramChatId: chatId,
             TelegramUserName: username,
@@ -440,9 +442,12 @@ function registerHandlers(bot, options = {}) {
               const perRef = Math.max(1, await getConfigInt('GenerationsPerReferral', 1));
               const refGenWord = perRef === 1 ? 'генерацию' : (perRef >= 2 && perRef <= 4 ? 'генерации' : 'генераций');
               const referrerChatId = Number(referrer.TelegramChatId) || String(referrer.TelegramChatId);
+              const invitedUsername = user.TelegramUserName ? `@${user.TelegramUserName}` : 'Друг';
+              const balance = await getAvailableGenerations(referrerChatId);
               const celebration =
-                `🎉 По вашей ссылке зарегистрировался друг!\n\n` +
-                `✨ Вам начислено +${perRef} ${refGenWord} — можно создавать изображения прямо сейчас. Спасибо, что приглашаете!`;
+                `🎉 По вашей ссылке зарегистрировался ${invitedUsername}!\n\n` +
+                `Вам начислено +${perRef} ${refGenWord}.\n` +
+                `Сейчас у вас доступно ${balance.total} генераций.`;
               await ctx.telegram.sendMessage(referrerChatId, celebration);
               await ref.update({ ReferrerNotifiedAt: new Date() }).catch(() => {});
             } catch (e) {
@@ -450,6 +455,13 @@ function registerHandlers(bot, options = {}) {
             }
           }
         }
+      }
+
+      // Notify user about applied promocode bonus generations (only when it really adds extra)
+      if (promoBonus > 0) {
+        const genWord =
+          promoBonus === 1 ? 'генерацию' : promoBonus >= 2 && promoBonus <= 4 ? 'генерации' : 'генераций';
+        await ctx.reply(`Промокод применён: вы получили +${promoBonus} ${genWord}.`);
       }
 
       if (wasNew) {
