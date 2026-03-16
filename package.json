@@ -9,7 +9,8 @@
     "dev": "node --watch src/index.js",
     "db:migrate": "sequelize-cli db:migrate",
     "db:seed": "sequelize-cli db:seed:all",
-    "backfill:preset-categories": "node scripts/backfill-preset-categories.js"
+    "backfill:preset-categories": "node scripts/backfill-preset-categories.js",
+    "backfill:preset-categories:unprocessed": "node scripts/backfill-preset-categories-unprocessed.js"
   },
   "engines": {
     "node": ">=20.0.0"

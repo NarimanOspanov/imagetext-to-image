@@ -163,8 +163,8 @@
       padding: 10px 12px;
       font-size: 15px;
       font-family: inherit;
-      color: var(--text);
-      background: var(--surface);
+      color: #f9fafb; /* явный светлый текст для контраста */
+      background: #111318;
       border: 1px solid rgba(255,255,255,.15);
       border-radius: var(--radius-sm);
       cursor: pointer;
@@ -179,11 +179,11 @@
       border-color: var(--accent);
     }
     .filter-select option {
-      background: var(--surface);
-      color: var(--text);
+      background: #111318;
+      color: #f9fafb; /* светлый текст в списке */
     }
     .filter-select option[value=""] {
-      color: var(--hint);
+      color: #9ca3af; /* более светлый серый для плейсхолдера */
     }
   </style>
 </head>
@@ -304,21 +304,7 @@
       html += '</select></div>';
     }
 
-    if (themes.length) {
-      html += '<div class="filter-row"><label for="filter-theme">Тематика</label><select id="filter-theme" class="filter-select">';
-      html += '<option value="">Все категории</option>';
-      parentThemes.forEach((parent) => {
-        const children = childThemes.filter((c) => c.parentId === parent.id);
-        if (children.length === 0) return;
-        html += '<optgroup label="' + escapeHtml(parent.name) + '">';
-        children.forEach((t) => {
-          const sel = selectedThemeId === t.id ? ' selected' : '';
-          html += '<option value="' + t.id + '"' + sel + '>' + escapeHtml(t.name) + '</option>';
-        });
-        html += '</optgroup>';
-      });
-      html += '</select></div>';
-    }
+    // Тематика dropdown временно скрыта по запросу
 
     html += '</div>';
     el.innerHTML = html;
