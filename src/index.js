@@ -258,10 +258,13 @@ async function getAvailableGenerations(chatId) {
   try {
     const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
     if (!user) return { total: 0, fromFree: 0, fromReferrals: 0, fromPurchases: 0, totalEver: 0 };
-    const [generationsPerReferral, initialFree, referralCount, referralTotalCount, purchases] = await Promise.all([
+    const [generationsPerReferral, initialFree, referralRows, referralTotalCount, purchases] = await Promise.all([
       getConfigInt('GenerationsPerReferral', 1).then((v) => Math.max(1, v)),
       getGenerationsPerRegistration(),
-      models.Referrals.count({ where: { ReferrerUserId: user.Id, BonusUsed: false } }),
+      models.Referrals.findAll({
+        where: { ReferrerUserId: user.Id, BonusUsed: false },
+        attributes: ['BonusRemaining'],
+      }),
       models.Referrals.count({ where: { ReferrerUserId: user.Id } }),
       models.UserPurchases.findAll({
         where: { UserId: user.Id },
@@ -270,7 +273,10 @@ async function getAvailableGenerations(chatId) {
       }),
     ]);
     const fromFree = Math.max(0, user.FreeGenerationsRemaining ?? 0);
-    const fromReferrals = referralCount * generationsPerReferral;
+    const fromReferrals = referralRows.reduce((sum, r) => {
+      const val = r.BonusRemaining != null ? r.BonusRemaining : generationsPerReferral;
+      return sum + Math.max(0, val);
+    }, 0);
     const fromPurchases = purchases.reduce((s, p) => s + (p.BalanceRemaining || 0), 0);
     const totalEver =
       initialFree +
@@ -324,13 +330,26 @@ async function consumeGenerations(chatId, count) {
       lock: t.LOCK.UPDATE,
       transaction: t,
     });
-    const fromReferrals = referralRows.length * generationsPerReferral;
-    const takeFromReferrals = Math.min(left, fromReferrals);
-    const rowsToMark = Math.ceil(takeFromReferrals / generationsPerReferral);
-    for (let i = 0; i < rowsToMark && i < referralRows.length; i++) {
-      await referralRows[i].update({ BonusUsed: true }, { transaction: t });
+    for (const row of referralRows) {
+      if (left <= 0) break;
+      const currentRemaining =
+        row.BonusRemaining != null ? Math.max(0, row.BonusRemaining) : generationsPerReferral;
+      if (currentRemaining <= 0) {
+        // nothing left in this referral, mark as used
+        await row.update({ BonusUsed: true, BonusRemaining: 0 }, { transaction: t });
+        continue;
+      }
+      const use = Math.min(left, currentRemaining);
+      const newRemaining = currentRemaining - use;
+      await row.update(
+        {
+          BonusRemaining: newRemaining,
+          BonusUsed: newRemaining <= 0,
+        },
+        { transaction: t }
+      );
+      left -= use;
     }
-    left -= takeFromReferrals;
     if (left > 0) {
       const purchases = await models.UserPurchases.findAll({
         where: { UserId: user.Id },

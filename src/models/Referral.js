@@ -33,6 +33,10 @@ export default function defineReferral(sequelize) {
         allowNull: false,
         defaultValue: false,
       },
+      BonusRemaining: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
       ReferrerNotifiedAt: {
         type: DataTypes.DATE,
         allowNull: true,
