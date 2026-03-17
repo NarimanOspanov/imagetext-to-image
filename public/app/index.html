@@ -185,6 +185,44 @@
     .filter-select option[value=""] {
       color: #9ca3af; /* более светлый серый для плейсхолдера */
     }
+
+    .mode-tabs {
+      display: flex;
+      gap: 0;
+      margin-bottom: 16px;
+      background: var(--surface);
+      border-radius: var(--radius-sm);
+      padding: 4px;
+      border: 1px solid rgba(255,255,255,.08);
+    }
+    .mode-tab {
+      flex: 1;
+      padding: 10px 14px;
+      font-size: 14px;
+      font-weight: 600;
+      font-family: inherit;
+      color: var(--hint);
+      background: transparent;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: color 0.2s, background 0.2s;
+    }
+    .mode-tab.active {
+      color: var(--text);
+      background: var(--accent-soft);
+    }
+    .card-title {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      color: #fff;
+      text-shadow: 0 1px 3px rgba(0,0,0,.6);
+    }
   </style>
 </head>
 <body>
@@ -192,6 +230,10 @@
   <header class="header">
     <h1>Идеи для фото</h1>
   </header>
+  <div id="mode-tabs" class="mode-tabs">
+    <button type="button" class="mode-tab active" data-mode="photosets">Фотосессии</button>
+    <button type="button" class="mode-tab" data-mode="presets">По фото</button>
+  </div>
   <div id="filters"></div>
   <div id="content"></div>
 </div>
@@ -210,6 +252,7 @@
   let selectedAudienceId = '';
   let selectedThemeId = '';
   let dimensionsCache = {};
+  let mode = 'photosets';
 
   async function api(path) {
     const res = await fetch(BASE + path);
@@ -226,9 +269,22 @@
     return q ? '/presets?' + q : '/presets';
   }
 
+  function buildPhotosetConfigsQuery() {
+    const params = new URLSearchParams();
+    if (selectedAudienceId) params.set('audience', String(selectedAudienceId));
+    if (selectedThemeId) params.set('theme', String(selectedThemeId));
+    const q = params.toString();
+    return q ? '/photoset-configs?' + q : '/photoset-configs';
+  }
+
   function imageUrl(fileName) {
     if (!fileName) return null;
     return BASE + '/preset-image/' + encodeURIComponent(fileName);
+  }
+
+  function photosetCoverUrl(fileName) {
+    if (!fileName) return null;
+    return BASE + '/photoset-cover/' + encodeURIComponent(fileName);
   }
 
   function openPresetInBot(presetId) {
@@ -238,6 +294,21 @@
       return;
     }
     const link = 'https://t.me/' + botUsername + '?start=preset_' + presetId;
+    if (tg?.openTelegramLink) {
+      tg.openTelegramLink(link);
+      tg.close();
+    } else {
+      window.open(link, '_blank');
+    }
+  }
+
+  function openPhotosetInBot(configId) {
+    const botUsername = window.__botUsername;
+    if (!botUsername) {
+      if (tg) tg.showAlert('Ссылка на бота пока не готова. Попробуй через минуту.');
+      return;
+    }
+    const link = 'https://t.me/' + botUsername + '?start=photoset_' + configId;
     if (tg?.openTelegramLink) {
       tg.openTelegramLink(link);
       tg.close();
@@ -315,14 +386,14 @@
       audienceSelect.addEventListener('change', () => {
         const v = audienceSelect.value;
         selectedAudienceId = v ? parseInt(v, 10) : '';
-        fetchPresetsAndRender();
+        loadCurrentMode();
       });
     }
     if (themeSelect) {
       themeSelect.addEventListener('change', () => {
         const v = themeSelect.value;
         selectedThemeId = v ? parseInt(v, 10) : '';
-        fetchPresetsAndRender();
+        loadCurrentMode();
       });
     }
   }
@@ -360,6 +431,38 @@
     });
   }
 
+  function renderPhotosets(configs) {
+    const el = document.getElementById('content');
+    const list = (configs || []).filter((c) => c.Id);
+    if (list.length === 0) {
+      const hasFilters = selectedAudienceId || selectedThemeId;
+      el.innerHTML = '<div class="empty">' + (hasFilters ? 'Нет фотосетов по выбранным фильтрам.' : 'Пока нет фотосетов.') + '</div>';
+      return;
+    }
+    el.innerHTML =
+      '<div class="masonry">' +
+      list.map((c) => {
+        const coverUrl = photosetCoverUrl(c.Image);
+        const name = escapeHtml(c.Name || '');
+        return (
+          '<article class="card" data-config-id="' + c.Id + '" role="button" tabindex="0">' +
+          '<div class="card-img-wrap">' +
+          (coverUrl ? '<img class="card-img" src="' + coverUrl + '" alt="" loading="lazy" />' : '') +
+          '<span class="card-title">' + name + '</span>' +
+          '</div>' +
+          '</article>'
+        );
+      }).join('') +
+      '</div>';
+
+    el.querySelectorAll('.card').forEach((card) => {
+      const id = parseInt(card.dataset.configId, 10);
+      const handler = () => openPhotosetInBot(id);
+      card.addEventListener('click', handler);
+      card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handler(); } });
+    });
+  }
+
   async function fetchPresetsAndRender() {
     const content = document.getElementById('content');
     content.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка идей...</div>';
@@ -380,13 +483,37 @@
     }
   }
 
+  async function fetchPhotosetsAndRender() {
+    const content = document.getElementById('content');
+    content.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка фотосетов...</div>';
+    try {
+      const configs = await api(buildPhotosetConfigsQuery());
+      renderPhotosets(configs);
+    } catch (err) {
+      content.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
+    }
+  }
+
+  function loadCurrentMode() {
+    if (mode === 'presets') fetchPresetsAndRender();
+    else fetchPhotosetsAndRender();
+  }
+
+  document.getElementById('mode-tabs').addEventListener('click', (e) => {
+    const tab = e.target.closest('.mode-tab');
+    if (!tab || !tab.dataset.mode) return;
+    mode = tab.dataset.mode;
+    document.querySelectorAll('.mode-tab').forEach((t) => t.classList.remove('active'));
+    tab.classList.add('active');
+    loadCurrentMode();
+  });
+
   (async () => {
     const content = document.getElementById('content');
-    content.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка идей...</div>';
+    content.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка...</div>';
 
     try {
-      const [presets, botInfo, audiencesRes, themesRes] = await Promise.all([
-        api('/presets'),
+      const [botInfo, audiencesRes, themesRes] = await Promise.all([
         api('/bot-info').catch(() => ({ botUsername: '' })),
         api('/audiences').catch(() => []),
         api('/themes').catch(() => []),
@@ -396,21 +523,7 @@
       themes = Array.isArray(themesRes) ? themesRes : [];
 
       renderFilters();
-      const withPhoto = (presets || []).filter((p) => p.Image && String(p.Image).trim());
-      if (withPhoto.length === 0) {
-        content.innerHTML = '<div class="empty">Пока нет идей с фото. Загляни позже.</div>';
-        return;
-      }
-      const dimensions = {};
-      await Promise.all(
-        withPhoto.map(async (p) => {
-          const url = imageUrl(p.Image);
-          const d = await loadImageDimensions(url);
-          dimensions[p.Id] = d;
-          dimensionsCache[p.Id] = d;
-        })
-      );
-      render(presets, dimensions);
+      loadCurrentMode();
     } catch (err) {
       content.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
     }

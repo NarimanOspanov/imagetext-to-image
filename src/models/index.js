@@ -15,6 +15,8 @@ import defineAudience from './Audience.js';
 import defineTheme from './Theme.js';
 import definePresetAudience from './PresetAudience.js';
 import definePresetTheme from './PresetTheme.js';
+import definePhotosetConfigAudience from './PhotosetConfigAudience.js';
+import definePhotosetConfigTheme from './PhotosetConfigTheme.js';
 
 /**
  * Initialize code-first models and associations. Call with the shared Sequelize instance.
@@ -37,6 +39,8 @@ export function initModels(sequelize) {
   const Theme = defineTheme(sequelize);
   const PresetAudience = definePresetAudience(sequelize);
   const PresetTheme = definePresetTheme(sequelize);
+  const PhotosetConfigAudience = definePhotosetConfigAudience(sequelize);
+  const PhotosetConfigTheme = definePhotosetConfigTheme(sequelize);
 
   User.hasMany(UserImageGeneration, { foreignKey: 'UserId' });
   UserImageGeneration.belongsTo(User, { foreignKey: 'UserId' });
@@ -99,6 +103,27 @@ export function initModels(sequelize) {
     otherKey: 'PresetId',
   });
   Theme.belongsTo(Theme, { as: 'Parent', foreignKey: 'ParentId' });
+
+  PhotosetConfig.belongsToMany(Audience, {
+    through: PhotosetConfigAudience,
+    foreignKey: 'PhotosetConfigId',
+    otherKey: 'AudienceId',
+  });
+  Audience.belongsToMany(PhotosetConfig, {
+    through: PhotosetConfigAudience,
+    foreignKey: 'AudienceId',
+    otherKey: 'PhotosetConfigId',
+  });
+  PhotosetConfig.belongsToMany(Theme, {
+    through: PhotosetConfigTheme,
+    foreignKey: 'PhotosetConfigId',
+    otherKey: 'ThemeId',
+  });
+  Theme.belongsToMany(PhotosetConfig, {
+    through: PhotosetConfigTheme,
+    foreignKey: 'ThemeId',
+    otherKey: 'PhotosetConfigId',
+  });
 
   return {
     User,

@@ -1843,6 +1843,67 @@ async function main() {
       res.status(404).send('Not found');
     }
   });
+  app.get('/api/app/photoset-configs', async (req, res) => {
+    try {
+      const audienceParam = (req.query.audience || '').toString().trim();
+      const themeParam = (req.query.theme || '').toString().trim();
+      const audienceIds = audienceParam
+        ? audienceParam.split(',').map((s) => parseInt(s, 10)).filter((n) => Number.isInteger(n) && n > 0)
+        : [];
+      const themeIds = themeParam
+        ? themeParam.split(',').map((s) => parseInt(s, 10)).filter((n) => Number.isInteger(n) && n > 0)
+        : [];
+
+      const include = [];
+      if (audienceIds.length > 0) {
+        include.push({
+          model: models.Audiences,
+          where: { Id: { [Op.in]: audienceIds } },
+          required: true,
+          attributes: [],
+          through: { attributes: [] },
+        });
+      }
+      if (themeIds.length > 0) {
+        include.push({
+          model: models.Themes,
+          where: { Id: { [Op.in]: themeIds } },
+          required: true,
+          attributes: [],
+          through: { attributes: [] },
+        });
+      }
+
+      const rows = await models.PhotosetConfigs.findAll({
+        include: include.length > 0 ? include : undefined,
+        order: [['Id', 'ASC']],
+        attributes: ['Id', 'Name', 'Description', 'Image'],
+        distinct: true,
+      });
+      res.json(rows);
+    } catch (err) {
+      console.error('GET /api/app/photoset-configs:', err);
+      res.status(500).json({ error: 'Failed to load photoset configs' });
+    }
+  });
+  app.get('/api/app/photoset-cover/:fileName', async (req, res) => {
+    try {
+      const connStr = config.azureStorageConnectionString;
+      if (!connStr) return res.status(503).send('Storage not configured');
+      const client = BlobServiceClient.fromConnectionString(connStr);
+      const container = client.getContainerClient(config.azureStorageContainer);
+      const fileName = req.params.fileName;
+      const blobName = fileName.startsWith('PhotosetCovers/') ? fileName : `PhotosetCovers/${fileName}`;
+      const blob = container.getBlockBlobClient(blobName);
+      const download = await blob.download(0);
+      res.set('Content-Type', download.contentType || 'image/jpeg');
+      res.set('Cache-Control', 'public, max-age=86400');
+      download.readableStreamBody.pipe(res);
+    } catch (err) {
+      console.error('App photoset-cover proxy:', err?.message);
+      res.status(404).send('Not found');
+    }
+  });
   app.use('/app', express.static(join(__dirname, '..', 'public', 'app')));
 
   await new Promise((resolve) => app.listen(port, resolve));

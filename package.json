@@ -10,7 +10,8 @@
     "db:migrate": "sequelize-cli db:migrate",
     "db:seed": "sequelize-cli db:seed:all",
     "backfill:preset-categories": "node scripts/backfill-preset-categories.js",
-    "backfill:preset-categories:unprocessed": "node scripts/backfill-preset-categories-unprocessed.js"
+    "backfill:preset-categories:unprocessed": "node scripts/backfill-preset-categories-unprocessed.js",
+    "backfill:photoset-config-categories:unprocessed": "node scripts/backfill-photoset-config-categories-unprocessed.js"
   },
   "engines": {
     "node": ">=20.0.0"
