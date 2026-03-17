@@ -614,12 +614,7 @@ function registerHandlers(bot, options = {}) {
 
   bot.action('start_want_picture', async (ctx) => {
     await ctx.answerCbQuery();
-    await ctx.reply(
-      '📸 Пришли в одном сообщении: фотографию и описание того, что нужно с ней сделать.\n\n' +
-      'Не знаешь, что написать? Смотри идеи 👉 https://t.me/rabota_5g\n\n' +
-      'Жду фото и описание 👇\n\n' +
-      '💡 Для продвинутых: команда /model — выбор модели вручную.'
-    );
+    await ctx.reply('📸 Пришли в одном сообщении: фотографию и описание того, что нужно с ней сделать.');
   });
 
   bot.command('ideas', async (ctx) => {
@@ -1120,7 +1115,7 @@ function registerHandlers(bot, options = {}) {
   });
 
   // —— Pay: show payment method options ——
-  bot.command('pay', async (ctx) => {
+  bot.command(['pay', 'buy'], async (ctx) => {
     const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
     try {
       await ctx.reply(
@@ -2052,10 +2047,10 @@ async function main() {
     { command: 'start', description: 'ℹ️ Что умеет бот' },
     { command: 'photosets', description: '📸 Готовые фотосеты' },
     { command: 'ideas', description: '✨ Идеи для фото' },
-    { command: 'account', description: '⚙️ Мой профиль' },
-    { command: 'model', description: '✨ Сменить модель' },
-    { command: 'pay', description: '💎 Докупить генерации' },
+    { command: 'buy', description: '💎 Докупить генерации' },
     { command: 'referrals', description: '🎁 Бонусы за друзей' },
+    { command: 'model', description: '✨ Сменить ИИ модель' },
+    { command: 'account', description: '⚙️ Мой профиль' },
     { command: 'help', description: '❓ Помощь' },
   ];
   try {
