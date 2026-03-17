@@ -1,12 +1,129 @@
 import { Router } from 'express';
 import { createHmac, randomUUID } from 'node:crypto';
 import { BlobServiceClient } from '@azure/storage-blob';
+import { GoogleGenAI } from '@google/genai';
 import { config } from './config.js';
 import { sequelize, models } from './db.js';
 
 const router = Router();
 
 const ADMIN_IDS = new Set(['5934959951', '110043646', '473160849']);
+
+// ── AI classifier for audiences/themes (shared by presets & photosets) ───────
+const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
+const TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.0-flash';
+
+function getTextFromResponse(response) {
+  const parts = response?.candidates?.[0]?.content?.parts ?? [];
+  const textPart = parts.find((p) => p.text != null);
+  return textPart?.text ?? '';
+}
+
+async function classifyTextToCategories(text, audienceRows, themeRows) {
+  const audienceStr = audienceRows.map((a) => `  ${a.Id}: ${a.Name}`).join('\n');
+  const themeStr = themeRows.map((t) => `  ${t.Id}: ${t.Name}${t.ParentId ? ' (child)' : ''}`).join('\n');
+
+  const systemPrompt =
+    'You are a classifier for photo session prompts and photoset descriptions (in Russian). For the given text, choose which target audiences and which theme categories apply. ' +
+    'Reply with ONLY a valid JSON object, no other text. Use the exact IDs from the lists below.\n' +
+    'Format: {"audienceIds": [1, 2], "themeIds": [3, 5, 10]}\n' +
+    'If none apply, use empty arrays. Choose at least one audience and at least one theme when the text clearly fits.\n\n' +
+    'Audiences (Id: Name):\n' +
+    audienceStr +
+    '\n\nThemes (Id: Name):\n' +
+    themeStr;
+
+  const userPrompt = `Text to classify:\n${(text || '').slice(0, 2000)}`;
+
+  const response = await ai.models.generateContent({
+    model: TEXT_MODEL,
+    contents: [{ text: systemPrompt + '\n\n' + userPrompt }],
+  });
+
+  const fullText = getTextFromResponse(response);
+  const jsonMatch = fullText.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error('No JSON in response from classifier');
+  const parsed = JSON.parse(jsonMatch[0]);
+  const audienceIds = Array.isArray(parsed.audienceIds)
+    ? parsed.audienceIds.map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n > 0)
+    : [];
+  const themeIds = Array.isArray(parsed.themeIds)
+    ? parsed.themeIds.map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n > 0)
+    : [];
+  return { audienceIds, themeIds };
+}
+
+async function classifyPresetCategories(presetId, prompt) {
+  if (!config.geminiApiKey || !prompt) return;
+  const [audiences, themes] = await Promise.all([
+    models.Audiences.findAll({ attributes: ['Id', 'Name'], order: [['SortOrder', 'ASC'], ['Id', 'ASC']] }),
+    models.Themes.findAll({ attributes: ['Id', 'Name', 'ParentId'], order: [['SortOrder', 'ASC'], ['Id', 'ASC']] }),
+  ]);
+  const { audienceIds, themeIds } = await classifyTextToCategories(prompt, audiences, themes);
+  const validAudienceIds = new Set(audiences.map((a) => a.Id));
+  const validThemeIds = new Set(themes.map((t) => t.Id));
+  const filteredAudienceIds = audienceIds.filter((id) => validAudienceIds.has(id));
+  const filteredThemeIds = themeIds.filter((id) => validThemeIds.has(id));
+
+  await sequelize.transaction(async (t) => {
+    await sequelize.query('DELETE FROM [dbo].[PresetAudiences] WHERE PresetId = :id', {
+      replacements: { id: presetId },
+      transaction: t,
+    });
+    await sequelize.query('DELETE FROM [dbo].[PresetThemes] WHERE PresetId = :id', {
+      replacements: { id: presetId },
+      transaction: t,
+    });
+    for (const aid of filteredAudienceIds) {
+      await sequelize.query(
+        'INSERT INTO [dbo].[PresetAudiences] (PresetId, AudienceId) VALUES (:id, :audienceId)',
+        { replacements: { id: presetId, audienceId: aid }, transaction: t }
+      );
+    }
+    for (const tid of filteredThemeIds) {
+      await sequelize.query(
+        'INSERT INTO [dbo].[PresetThemes] (PresetId, ThemeId) VALUES (:id, :themeId)',
+        { replacements: { id: presetId, themeId: tid }, transaction: t }
+      );
+    }
+  });
+}
+
+async function classifyPhotosetConfigCategories(configId, description) {
+  if (!config.geminiApiKey || !description) return;
+  const [audiences, themes] = await Promise.all([
+    models.Audiences.findAll({ attributes: ['Id', 'Name'], order: [['SortOrder', 'ASC'], ['Id', 'ASC']] }),
+    models.Themes.findAll({ attributes: ['Id', 'Name', 'ParentId'], order: [['SortOrder', 'ASC'], ['Id', 'ASC']] }),
+  ]);
+  const { audienceIds, themeIds } = await classifyTextToCategories(description, audiences, themes);
+  const validAudienceIds = new Set(audiences.map((a) => a.Id));
+  const validThemeIds = new Set(themes.map((t) => t.Id));
+  const filteredAudienceIds = audienceIds.filter((id) => validAudienceIds.has(id));
+  const filteredThemeIds = themeIds.filter((id) => validThemeIds.has(id));
+
+  await sequelize.transaction(async (t) => {
+    await sequelize.query('DELETE FROM [dbo].[PhotosetConfigAudiences] WHERE PhotosetConfigId = :id', {
+      replacements: { id: configId },
+      transaction: t,
+    });
+    await sequelize.query('DELETE FROM [dbo].[PhotosetConfigThemes] WHERE PhotosetConfigId = :id', {
+      replacements: { id: configId },
+      transaction: t,
+    });
+    for (const aid of filteredAudienceIds) {
+      await sequelize.query(
+        'INSERT INTO [dbo].[PhotosetConfigAudiences] (PhotosetConfigId, AudienceId) VALUES (:id, :audienceId)',
+        { replacements: { id: configId, audienceId: aid }, transaction: t }
+      );
+    }
+    for (const tid of filteredThemeIds) {
+      await sequelize.query(
+        'INSERT INTO [dbo].[PhotosetConfigThemes] (PhotosetConfigId, ThemeId) VALUES (:id, :themeId)',
+        { replacements: { id: configId, themeId: tid }, transaction: t }
+      );
+    }
+  });
+}
 
 /** Verify Telegram WebApp initData and return the user object, or null on failure. */
 function verifyInitData(initData) {
@@ -86,6 +203,33 @@ router.get('/storage-config', adminAuth, (_req, res) => {
       ? `https://${accountName}.blob.core.windows.net/${config.azureStorageContainer}`
       : null,
   });
+});
+
+// ── Reference data for admin (audiences & themes) ────────────────────────────
+router.get('/audiences', adminAuth, async (_req, res) => {
+  try {
+    const rows = await models.Audiences.findAll({
+      order: [['SortOrder', 'ASC'], ['Id', 'ASC']],
+      attributes: ['Id', 'Name', 'SortOrder'],
+    });
+    res.json(rows);
+  } catch (err) {
+    console.error('Admin GET /audiences:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/themes', adminAuth, async (_req, res) => {
+  try {
+    const rows = await models.Themes.findAll({
+      order: [['SortOrder', 'ASC'], ['Id', 'ASC']],
+      attributes: ['Id', 'Name', 'ParentId', 'SortOrder'],
+    });
+    res.json(rows);
+  } catch (err) {
+    console.error('Admin GET /themes:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Founder stats (per-period aggregates for Mini App) ────────────────────────
@@ -206,7 +350,11 @@ router.get('/preset-image/:fileName', async (req, res) => {
 router.get('/configs', adminAuth, async (_req, res) => {
   try {
     const rows = await models.PhotosetConfigs.findAll({
-      include: [{ model: models.Photosets, include: [{ model: models.Presets }] }],
+      include: [
+        { model: models.Photosets, include: [{ model: models.Presets }] },
+        { model: models.Audiences },
+        { model: models.Themes },
+      ],
       order: [['Id', 'ASC']],
     });
     res.json(rows);
@@ -228,8 +376,17 @@ router.post('/configs', adminAuth, async (req, res) => {
       Description: description.trim(),
       Image: savedFileName,
     });
+    try {
+      await classifyPhotosetConfigCategories(row.Id, row.Description);
+    } catch (e) {
+      console.error('Classify photoset config error:', e?.message || e);
+    }
     const full = await models.PhotosetConfigs.findByPk(row.Id, {
-      include: [{ model: models.Photosets, include: [{ model: models.Presets }] }],
+      include: [
+        { model: models.Photosets, include: [{ model: models.Presets }] },
+        { model: models.Audiences },
+        { model: models.Themes },
+      ],
     });
     res.json(full);
   } catch (err) {
@@ -250,8 +407,17 @@ router.put('/configs/:id', adminAuth, async (req, res) => {
       updates.Image = await uploadCoverBlob(imageBase64, imageFileName);
     }
     await models.PhotosetConfigs.update(updates, { where: { Id: id } });
+    try {
+      await classifyPhotosetConfigCategories(id, updates.Description);
+    } catch (e) {
+      console.error('Classify photoset config (PUT) error:', e?.message || e);
+    }
     const full = await models.PhotosetConfigs.findByPk(id, {
-      include: [{ model: models.Photosets, include: [{ model: models.Presets }] }],
+      include: [
+        { model: models.Photosets, include: [{ model: models.Presets }] },
+        { model: models.Audiences },
+        { model: models.Themes },
+      ],
     });
     res.json(full);
   } catch (err) {
@@ -290,7 +456,10 @@ router.delete('/configs/:id', adminAuth, async (req, res) => {
 // ── Presets ───────────────────────────────────────────────────────────────────
 router.get('/presets', adminAuth, async (_req, res) => {
   try {
-    const rows = await models.Presets.findAll({ order: [['Id', 'ASC']] });
+    const rows = await models.Presets.findAll({
+      include: [{ model: models.Audiences }, { model: models.Themes }],
+      order: [['Id', 'ASC']],
+    });
     res.json(rows);
   } catch (err) {
     console.error('Admin GET /presets:', err);
@@ -307,7 +476,15 @@ router.post('/presets', adminAuth, async (req, res) => {
       fields.Image = await uploadPresetImageBlob(imageBase64, imageFileName);
     }
     const row = await models.Presets.create(fields);
-    res.json(row);
+    try {
+      await classifyPresetCategories(row.Id, row.Prompt);
+    } catch (e) {
+      console.error('Classify preset error:', e?.message || e);
+    }
+    const full = await models.Presets.findByPk(row.Id, {
+      include: [{ model: models.Audiences }, { model: models.Themes }],
+    });
+    res.json(full);
   } catch (err) {
     console.error('Admin POST /presets:', err);
     res.status(500).json({ error: err.message });
@@ -324,7 +501,14 @@ router.put('/presets/:id', adminAuth, async (req, res) => {
       updates.Image = await uploadPresetImageBlob(imageBase64, imageFileName);
     }
     await models.Presets.update(updates, { where: { Id: id } });
-    const row = await models.Presets.findByPk(id);
+    try {
+      await classifyPresetCategories(id, updates.Prompt);
+    } catch (e) {
+      console.error('Classify preset (PUT) error:', e?.message || e);
+    }
+    const row = await models.Presets.findByPk(id, {
+      include: [{ model: models.Audiences }, { model: models.Themes }],
+    });
     res.json(row);
   } catch (err) {
     console.error('Admin PUT /presets/:id:', err);
@@ -355,6 +539,136 @@ router.delete('/presets/:id', adminAuth, async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('Admin DELETE /presets/:id:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Reclassify endpoints (manual trigger from admin UI) ──────────────────────
+router.post('/configs/:id/reclassify', adminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const row = await models.PhotosetConfigs.findByPk(id);
+    if (!row) return res.status(404).json({ error: 'PhotosetConfig not found' });
+    await classifyPhotosetConfigCategories(id, row.Description);
+    const full = await models.PhotosetConfigs.findByPk(id, {
+      include: [
+        { model: models.Photosets, include: [{ model: models.Presets }] },
+        { model: models.Audiences },
+        { model: models.Themes },
+      ],
+    });
+    res.json(full);
+  } catch (err) {
+    console.error('Admin POST /configs/:id/reclassify:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/presets/:id/reclassify', adminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const row = await models.Presets.findByPk(id);
+    if (!row) return res.status(404).json({ error: 'Preset not found' });
+    await classifyPresetCategories(id, row.Prompt);
+    const full = await models.Presets.findByPk(id, {
+      include: [{ model: models.Audiences }, { model: models.Themes }],
+    });
+    res.json(full);
+  } catch (err) {
+    console.error('Admin POST /presets/:id/reclassify:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Manual category assignment (without AI)
+router.post('/configs/:id/categories', adminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const { audienceIds, themeIds } = req.body || {};
+    const auds = Array.isArray(audienceIds)
+      ? audienceIds.map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n > 0)
+      : [];
+    const themes = Array.isArray(themeIds)
+      ? themeIds.map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n > 0)
+      : [];
+
+    await sequelize.transaction(async (t) => {
+      await sequelize.query('DELETE FROM [dbo].[PhotosetConfigAudiences] WHERE PhotosetConfigId = :id', {
+        replacements: { id },
+        transaction: t,
+      });
+      await sequelize.query('DELETE FROM [dbo].[PhotosetConfigThemes] WHERE PhotosetConfigId = :id', {
+        replacements: { id },
+        transaction: t,
+      });
+      for (const aid of auds) {
+        await sequelize.query(
+          'INSERT INTO [dbo].[PhotosetConfigAudiences] (PhotosetConfigId, AudienceId) VALUES (:id, :audienceId)',
+          { replacements: { id, audienceId: aid }, transaction: t }
+        );
+      }
+      for (const tid of themes) {
+        await sequelize.query(
+          'INSERT INTO [dbo].[PhotosetConfigThemes] (PhotosetConfigId, ThemeId) VALUES (:id, :themeId)',
+          { replacements: { id, themeId: tid }, transaction: t }
+        );
+      }
+    });
+
+    const full = await models.PhotosetConfigs.findByPk(id, {
+      include: [
+        { model: models.Photosets, include: [{ model: models.Presets }] },
+        { model: models.Audiences },
+        { model: models.Themes },
+      ],
+    });
+    res.json(full);
+  } catch (err) {
+    console.error('Admin POST /configs/:id/categories:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/presets/:id/categories', adminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const { audienceIds, themeIds } = req.body || {};
+    const auds = Array.isArray(audienceIds)
+      ? audienceIds.map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n > 0)
+      : [];
+    const themes = Array.isArray(themeIds)
+      ? themeIds.map((n) => parseInt(n, 10)).filter((n) => Number.isInteger(n) && n > 0)
+      : [];
+
+    await sequelize.transaction(async (t) => {
+      await sequelize.query('DELETE FROM [dbo].[PresetAudiences] WHERE PresetId = :id', {
+        replacements: { id },
+        transaction: t,
+      });
+      await sequelize.query('DELETE FROM [dbo].[PresetThemes] WHERE PresetId = :id', {
+        replacements: { id },
+        transaction: t,
+      });
+      for (const aid of auds) {
+        await sequelize.query(
+          'INSERT INTO [dbo].[PresetAudiences] (PresetId, AudienceId) VALUES (:id, :audienceId)',
+          { replacements: { id, audienceId: aid }, transaction: t }
+        );
+      }
+      for (const tid of themes) {
+        await sequelize.query(
+          'INSERT INTO [dbo].[PresetThemes] (PresetId, ThemeId) VALUES (:id, :themeId)',
+          { replacements: { id, themeId: tid }, transaction: t }
+        );
+      }
+    });
+
+    const full = await models.Presets.findByPk(id, {
+      include: [{ model: models.Audiences }, { model: models.Themes }],
+    });
+    res.json(full);
+  } catch (err) {
+    console.error('Admin POST /presets/:id/categories:', err);
     res.status(500).json({ error: err.message });
   }
 });

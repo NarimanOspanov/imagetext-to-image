@@ -131,6 +131,10 @@
     .toast.success { background: var(--success); }
     .toast.error { background: var(--danger); }
 
+    .cat-chips { display:flex; flex-wrap:wrap; gap:6px; }
+    .cat-chip { display:inline-flex; align-items:center; gap:4px; padding:4px 8px; border-radius:999px; background:var(--bg2); font-size:12px; }
+    .cat-chip input { accent-color: var(--accent); }
+
     /* ── Skeleton ────────────────────────────────────────── */
     @keyframes shimmer { 0%{background-position:-400px 0} 100%{background-position:400px 0} }
     .skeleton { background: linear-gradient(90deg, var(--bg2) 25%, var(--border) 50%, var(--bg2) 75%); background-size: 800px 100%; animation: shimmer 1.4s infinite; border-radius: 8px; }
@@ -183,6 +187,14 @@
       </label>
       <img class="img-preview" id="imgPreview" alt="Preview" />
     </div>
+    <div class="field">
+      <label>Аудитории</label>
+      <div id="ps-audiences" class="cat-chips"></div>
+    </div>
+    <div class="field">
+      <label>Темы</label>
+      <div id="ps-themes" class="cat-chips"></div>
+    </div>
     <button class="btn-primary" id="btn-create-photoset" onclick="submitPhotoset()">Создать фотосет</button>
   </div>
 </div>
@@ -207,6 +219,14 @@
     <div class="field">
       <label>Текст промпта</label>
       <textarea id="pr-prompt" placeholder="Введите полный текст промпта для генерации изображения..." style="min-height:160px"></textarea>
+    </div>
+    <div class="field">
+      <label>Аудитории</label>
+      <div id="pr-audiences" class="cat-chips"></div>
+    </div>
+    <div class="field">
+      <label>Темы</label>
+      <div id="pr-themes" class="cat-chips"></div>
     </div>
     <button class="btn-primary" id="btn-create-preset" onclick="submitPreset()">Создать промпт</button>
   </div>
@@ -277,6 +297,8 @@
   let editingPresetId = null;   // null = create mode, number = edit mode
   let promocodes = [];
   let editingPromoId = null;    // null = create, number = edit
+  let allAudiences = [];
+  let allThemes = [];
 
   // ── API ───────────────────────────────────────────────────────────────────
   const BASE = '/api/admin';
@@ -297,16 +319,21 @@
   }
 
   async function loadAll() {
-    const [cfgs, prs, promos, bi] = await Promise.all([
+    const [cfgs, prs, promos, bi, auds, themes] = await Promise.all([
       api('GET', '/configs'),
       api('GET', '/presets'),
       api('GET', '/promocodes').catch(() => []),
       fetch('/api/admin/bot-info').then(r => r.json()).catch(() => ({ botUsername: '' })),
+      api('GET', '/audiences'),
+      api('GET', '/themes'),
     ]);
     configs = cfgs;
     presets = prs;
     promocodes = Array.isArray(promos) ? promos : [];
     botUsername = bi.botUsername || '';
+    allAudiences = Array.isArray(auds) ? auds : [];
+    allThemes = Array.isArray(themes) ? themes : [];
+    renderCategoryControls();
   }
 
   // ── Toast ─────────────────────────────────────────────────────────────────
@@ -405,6 +432,9 @@
       preview.classList.remove('visible');
       document.getElementById('imgPickText').textContent = 'Нажмите, чтобы выбрать фото';
     }
+    setCheckedFromIds('ps-audiences', (cfg?.Audiences || []).map(a => a.Id));
+    setCheckedFromIds('ps-themes', (cfg?.Themes || []).map(t => t.Id));
+
     document.querySelector('#sheet-photoset .sheet-title').textContent =
       cfg ? 'Редактировать фотосет' : 'Новый фотосет';
     document.getElementById('btn-create-photoset').textContent =
@@ -425,14 +455,20 @@
       const body = { name, description };
       if (psImageBase64) { body.imageBase64 = psImageBase64; body.imageFileName = psImageFileName; }
       if (editingConfigId) {
-        const updated = await api('PUT', `/configs/${editingConfigId}`, body);
+        let updated = await api('PUT', `/configs/${editingConfigId}`, body);
+        const audienceIds = collectIds('ps-audiences');
+        const themeIds = collectIds('ps-themes');
+        updated = await api('POST', `/configs/${editingConfigId}/categories`, { audienceIds, themeIds });
         const idx = configs.findIndex(c => c.Id === editingConfigId);
         if (idx !== -1) configs[idx] = updated;
         closeSheet('sheet-photoset');
         render();
         showToast('Фотосет обновлён ✓', 'success');
       } else {
-        const row = await api('POST', '/configs', body);
+        let row = await api('POST', '/configs', body);
+        const audienceIds = collectIds('ps-audiences');
+        const themeIds = collectIds('ps-themes');
+        row = await api('POST', `/configs/${row.Id}/categories`, { audienceIds, themeIds });
         configs.unshift(row);
         closeSheet('sheet-photoset');
         render();
@@ -464,6 +500,9 @@
       preview.classList.remove('visible');
       document.getElementById('prImgPickText').textContent = 'Нажмите, чтобы выбрать фото';
     }
+    setCheckedFromIds('pr-audiences', (preset?.Audiences || []).map(a => a.Id));
+    setCheckedFromIds('pr-themes', (preset?.Themes || []).map(t => t.Id));
+
     document.querySelector('#sheet-preset .sheet-title').textContent =
       preset ? 'Редактировать промпт' : 'Новый промпт';
     document.getElementById('btn-create-preset').textContent =
@@ -481,7 +520,10 @@
       const body = { prompt };
       if (prImageBase64) { body.imageBase64 = prImageBase64; body.imageFileName = prImageFileName; }
       if (editingPresetId) {
-        const updated = await api('PUT', `/presets/${editingPresetId}`, body);
+        let updated = await api('PUT', `/presets/${editingPresetId}`, body);
+        const audienceIds = collectIds('pr-audiences');
+        const themeIds = collectIds('pr-themes');
+        updated = await api('POST', `/presets/${editingPresetId}/categories`, { audienceIds, themeIds });
         const idx = presets.findIndex(p => p.Id === editingPresetId);
         if (idx !== -1) presets[idx] = updated;
         configs.forEach(c => (c.Photosets || []).forEach(ps => {
@@ -494,7 +536,10 @@
         render();
         showToast('Промпт обновлён ✓', 'success');
       } else {
-        const row = await api('POST', '/presets', body);
+        let row = await api('POST', '/presets', body);
+        const audienceIds = collectIds('pr-audiences');
+        const themeIds = collectIds('pr-themes');
+        row = await api('POST', `/presets/${row.Id}/categories`, { audienceIds, themeIds });
         presets.unshift(row);
         closeSheet('sheet-preset');
         render();
@@ -729,6 +774,51 @@
     return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
+  function renderCategoryControls() {
+    const psAud = document.getElementById('ps-audiences');
+    const psTh = document.getElementById('ps-themes');
+    const prAud = document.getElementById('pr-audiences');
+    const prTh = document.getElementById('pr-themes');
+    if (!psAud || !psTh || !prAud || !prTh) return;
+
+    const audHtml = allAudiences.map(a => `
+      <label class="cat-chip">
+        <input type="checkbox" value="${a.Id}" />
+        <span>${esc(a.Name)}</span>
+      </label>
+    `).join('');
+    const themeHtml = allThemes.map(t => `
+      <label class="cat-chip">
+        <input type="checkbox" value="${t.Id}" />
+        <span>${esc(t.Name)}</span>
+      </label>
+    `).join('');
+
+    psAud.innerHTML = audHtml;
+    prAud.innerHTML = audHtml;
+    psTh.innerHTML = themeHtml;
+    prTh.innerHTML = themeHtml;
+  }
+
+  function setCheckedFromIds(containerId, ids) {
+    const box = document.getElementById(containerId);
+    if (!box) return;
+    const set = new Set((ids || []).map(Number));
+    box.querySelectorAll('input[type="checkbox"]').forEach(ch => {
+      ch.checked = set.has(parseInt(ch.value, 10));
+    });
+  }
+
+  function collectIds(containerId) {
+    const box = document.getElementById(containerId);
+    if (!box) return [];
+    const res = [];
+    box.querySelectorAll('input[type="checkbox"]').forEach(ch => {
+      if (ch.checked) res.push(parseInt(ch.value, 10));
+    });
+    return res;
+  }
+
   // Always route cover images through the server proxy — no cross-origin or
   // public-access issues, works even if the blob container is private.
   function coverUrl(fileName) {
@@ -749,6 +839,8 @@
         : `<div class="card-cover-placeholder">📸</div>`;
       const link = deepLink(cfg.Id);
       const linkedPresets = cfg.Photosets || [];
+      const auds = (cfg.Audiences || []).map(a => a.Name).join(', ');
+      const themes = (cfg.Themes || []).map(t => t.Name).join(', ');
       const presetsHtml = linkedPresets.map(ps => `
         <div class="preset-chip">
           <span class="preset-chip-text">${esc(ps.Preset?.Prompt || '')}</span>
@@ -775,6 +867,12 @@
             <button class="btn-copy" onclick="copyDeepLink(${cfg.Id})">Копировать</button>
           </div>` : ''}
           <div class="card-body">
+            <div class="card-section-title">Аудитории и темы</div>
+            <div style="font-size:13px;margin-bottom:8px;color:var(--hint);">
+              <div><strong>Аудитории:</strong> ${auds ? esc(auds) : '—'}</div>
+              <div><strong>Темы:</strong> ${themes ? esc(themes) : '—'}</div>
+            </div>
+            <button class="btn-add-link" style="margin-top:0;margin-bottom:10px" onclick="reclassifyPhotoset(${cfg.Id})">Переклассифицировать</button>
             <div class="card-section-title">Промпты (${linkedPresets.length})</div>
             ${presetsHtml}
             <button class="btn-add-link" onclick="openLinkSheet(${cfg.Id})">+ Добавить промпт</button>
@@ -822,6 +920,8 @@
     }
     return presets.map(p => {
       const imgUrl = presetImageUrl(p.Image);
+      const auds = (p.Audiences || []).map(a => a.Name).join(', ');
+      const themes = (p.Themes || []).map(t => t.Name).join(', ');
       const link = presetDeepLink(p.Id);
       const imgHtml = imgUrl
         ? `<img src="${esc(imgUrl)}" alt="preview"
@@ -843,6 +943,12 @@
                 <button class="btn-icon danger" title="Удалить" onclick="deletePreset(${p.Id})">🗑</button>
               </div>
             </div>
+            <div class="card-section-title" style="margin-top:8px">Аудитории и темы</div>
+            <div style="font-size:13px;margin-bottom:8px;color:var(--hint);">
+              <div><strong>Аудитории:</strong> ${auds ? esc(auds) : '—'}</div>
+              <div><strong>Темы:</strong> ${themes ? esc(themes) : '—'}</div>
+            </div>
+            <button class="btn-add-link" style="margin-top:0" onclick="reclassifyPreset(${p.Id})">Переклассифицировать</button>
             ${link ? `
             <div class="deep-link-bar" style="margin:0">
               <span class="deep-link-text">${esc(link)}</span>
@@ -860,6 +966,32 @@
     else if (activeTab === 'presets') el.innerHTML = renderPresets();
     else if (activeTab === 'promocodes') el.innerHTML = renderPromocodes();
     else el.innerHTML = renderPhotosets();
+  }
+
+  async function reclassifyPhotoset(id) {
+    try {
+      showToast('Переклассификация фотосета...', '');
+      const updated = await api('POST', `/configs/${id}/reclassify`);
+      const idx = configs.findIndex(c => c.Id === id);
+      if (idx !== -1) configs[idx] = updated;
+      render();
+      showToast('Категории фотосета обновлены ✓', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  async function reclassifyPreset(id) {
+    try {
+      showToast('Переклассификация промпта...', '');
+      const updated = await api('POST', `/presets/${id}/reclassify`);
+      const idx = presets.findIndex(p => p.Id === id);
+      if (idx !== -1) presets[idx] = updated;
+      render();
+      showToast('Категории промпта обновлены ✓', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
   }
 
   // ── Boot ──────────────────────────────────────────────────────────────────
