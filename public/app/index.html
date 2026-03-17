@@ -143,10 +143,7 @@
     }
 
     .filters {
-      margin-bottom: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
+      display: none;
     }
     .filter-row {
       display: flex;
@@ -249,8 +246,6 @@
 
   let audiences = [];
   let themes = [];
-  let selectedAudienceId = '';
-  let selectedThemeId = '';
   let dimensionsCache = {};
   let mode = 'photosets';
   let presetsState = { items: [], offset: 0, hasMore: true, loading: false };
@@ -265,8 +260,6 @@
 
   function buildPresetsQuery(limit, offset) {
     const params = new URLSearchParams();
-    if (selectedAudienceId) params.set('audience', String(selectedAudienceId));
-    if (selectedThemeId) params.set('theme', String(selectedThemeId));
     if (limit != null) params.set('limit', String(limit));
     if (offset != null) params.set('offset', String(offset));
     const q = params.toString();
@@ -275,8 +268,6 @@
 
   function buildPhotosetConfigsQuery(limit, offset) {
     const params = new URLSearchParams();
-    if (selectedAudienceId) params.set('audience', String(selectedAudienceId));
-    if (selectedThemeId) params.set('theme', String(selectedThemeId));
     if (limit != null) params.set('limit', String(limit));
     if (offset != null) params.set('offset', String(offset));
     const q = params.toString();
@@ -361,47 +352,9 @@
   }
 
   function renderFilters() {
+    // Filters hidden for now
     const el = document.getElementById('filters');
-    if (!audiences.length && !themes.length) {
-      el.innerHTML = '';
-      return;
-    }
-    const parentThemes = themes.filter((t) => t.parentId == null);
-    const childThemes = themes.filter((t) => t.parentId != null);
-
-    let html = '<div class="filters">';
-
-    if (audiences.length) {
-      html += '<div class="filter-row"><label for="filter-audience">Для кого</label><select id="filter-audience" class="filter-select">';
-      html += '<option value="">Все категории</option>';
-      audiences.forEach((a) => {
-        const sel = selectedAudienceId === a.id ? ' selected' : '';
-        html += '<option value="' + a.id + '"' + sel + '>' + escapeHtml(a.name) + '</option>';
-      });
-      html += '</select></div>';
-    }
-
-    // Тематика dropdown временно скрыта по запросу
-
-    html += '</div>';
-    el.innerHTML = html;
-
-    const audienceSelect = document.getElementById('filter-audience');
-    const themeSelect = document.getElementById('filter-theme');
-    if (audienceSelect) {
-      audienceSelect.addEventListener('change', () => {
-        const v = audienceSelect.value;
-        selectedAudienceId = v ? parseInt(v, 10) : '';
-        loadCurrentMode();
-      });
-    }
-    if (themeSelect) {
-      themeSelect.addEventListener('change', () => {
-        const v = themeSelect.value;
-        selectedThemeId = v ? parseInt(v, 10) : '';
-        loadCurrentMode();
-      });
-    }
+    if (el) el.innerHTML = '';
   }
 
   function render(presets, dimensions) {
@@ -480,6 +433,15 @@
     }
     if (!presetsState.hasMore || presetsState.loading) return;
     presetsState.loading = true;
+    let moreEl = document.getElementById('load-more');
+    if (!reset) {
+      if (!moreEl) {
+        moreEl = document.createElement('div');
+        moreEl.id = 'load-more';
+        moreEl.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка...</div>';
+        content.appendChild(moreEl);
+      }
+    }
     try {
       const limit = 30;
       const data = await api(buildPresetsQuery(limit, presetsState.offset));
@@ -499,6 +461,7 @@
         }
       }
       render(presetsState.items, dimensionsCache);
+      if (moreEl) moreEl.remove();
     } catch (err) {
       content.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
     } finally {
@@ -514,6 +477,15 @@
     }
     if (!photosetsState.hasMore || photosetsState.loading) return;
     photosetsState.loading = true;
+    let moreEl = document.getElementById('load-more');
+    if (!reset) {
+      if (!moreEl) {
+        moreEl = document.createElement('div');
+        moreEl.id = 'load-more';
+        moreEl.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка...</div>';
+        content.appendChild(moreEl);
+      }
+    }
     try {
       const limit = 30;
       const data = await api(buildPhotosetConfigsQuery(limit, photosetsState.offset));
@@ -524,6 +496,7 @@
       photosetsState.hasMore = hasMore;
 
       renderPhotosets(photosetsState.items);
+      if (moreEl) moreEl.remove();
     } catch (err) {
       content.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
     } finally {
