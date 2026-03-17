@@ -363,6 +363,15 @@ async function consumeGenerations(chatId, count) {
         await p.update({ BalanceRemaining: p.BalanceRemaining - use }, { transaction: t });
         left -= use;
       }
+    }
+    await t.commit();
+    return left === 0;
+  } catch (err) {
+    await t.rollback();
+    console.error('consumeGenerations error:', err);
+    return false;
+  }
+}
 
 /** Try to consume generations and, if недостаточно и count === 1, выдать 1 бонус на сегодня и повторить. */
 async function consumeWithDailyBonus(chatId, count) {
@@ -406,20 +415,12 @@ async function consumeWithDailyBonus(chatId, count) {
     await t.commit();
   } catch (err) {
     await t.rollback();
-    console.error("consumeWithDailyBonus daily bonus error:", err);
+    console.error('consumeWithDailyBonus daily bonus error:', err);
     return false;
   }
 
   // Повторяем попытку списания 1 генерации уже с учётом бонуса.
   return consumeGenerations(chatId, count);
-    }
-    await t.commit();
-    return left === 0;
-  } catch (err) {
-    await t.rollback();
-    console.error('consumeGenerations error:', err);
-    return false;
-  }
 }
 
 function registerHandlers(bot, options = {}) {
