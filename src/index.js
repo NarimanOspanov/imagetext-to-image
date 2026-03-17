@@ -1788,6 +1788,11 @@ async function main() {
       const themeIds = themeParam
         ? themeParam.split(',').map((s) => parseInt(s, 10)).filter((n) => Number.isInteger(n) && n > 0)
         : [];
+      const limit = Math.min(
+        60,
+        Math.max(1, parseInt((req.query.limit || '30').toString(), 10) || 30)
+      );
+      const offset = Math.max(0, parseInt((req.query.offset || '0').toString(), 10) || 0);
 
       const baseWhere = {
         [Op.and]: [{ Image: { [Op.ne]: null } }, { Image: { [Op.ne]: '' } }],
@@ -1812,14 +1817,20 @@ async function main() {
         });
       }
 
-      const rows = await models.Presets.findAll({
+      const result = await models.Presets.findAndCountAll({
         where: baseWhere,
         include: include.length > 0 ? include : undefined,
         order: [['Id', 'ASC']],
         attributes: ['Id', 'Prompt', 'Image'],
         distinct: true,
+        limit,
+        offset,
       });
-      res.json(rows);
+      res.json({
+        items: result.rows,
+        hasMore: offset + result.rows.length < result.count,
+        total: result.count,
+      });
     } catch (err) {
       console.error('GET /api/app/presets:', err);
       res.status(500).json({ error: 'Failed to load presets' });
@@ -1853,6 +1864,11 @@ async function main() {
       const themeIds = themeParam
         ? themeParam.split(',').map((s) => parseInt(s, 10)).filter((n) => Number.isInteger(n) && n > 0)
         : [];
+      const limit = Math.min(
+        60,
+        Math.max(1, parseInt((req.query.limit || '30').toString(), 10) || 30)
+      );
+      const offset = Math.max(0, parseInt((req.query.offset || '0').toString(), 10) || 0);
 
       const include = [];
       if (audienceIds.length > 0) {
@@ -1874,13 +1890,19 @@ async function main() {
         });
       }
 
-      const rows = await models.PhotosetConfigs.findAll({
+      const result = await models.PhotosetConfigs.findAndCountAll({
         include: include.length > 0 ? include : undefined,
         order: [['Id', 'ASC']],
         attributes: ['Id', 'Name', 'Description', 'Image'],
         distinct: true,
+        limit,
+        offset,
       });
-      res.json(rows);
+      res.json({
+        items: result.rows,
+        hasMore: offset + result.rows.length < result.count,
+        total: result.count,
+      });
     } catch (err) {
       console.error('GET /api/app/photoset-configs:', err);
       res.status(500).json({ error: 'Failed to load photoset configs' });

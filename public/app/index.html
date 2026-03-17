@@ -253,6 +253,8 @@
   let selectedThemeId = '';
   let dimensionsCache = {};
   let mode = 'photosets';
+  let presetsState = { items: [], offset: 0, hasMore: true, loading: false };
+  let photosetsState = { items: [], offset: 0, hasMore: true, loading: false };
 
   async function api(path) {
     const res = await fetch(BASE + path);
@@ -261,18 +263,22 @@
     return data;
   }
 
-  function buildPresetsQuery() {
+  function buildPresetsQuery(limit, offset) {
     const params = new URLSearchParams();
     if (selectedAudienceId) params.set('audience', String(selectedAudienceId));
     if (selectedThemeId) params.set('theme', String(selectedThemeId));
+    if (limit != null) params.set('limit', String(limit));
+    if (offset != null) params.set('offset', String(offset));
     const q = params.toString();
     return q ? '/presets?' + q : '/presets';
   }
 
-  function buildPhotosetConfigsQuery() {
+  function buildPhotosetConfigsQuery(limit, offset) {
     const params = new URLSearchParams();
     if (selectedAudienceId) params.set('audience', String(selectedAudienceId));
     if (selectedThemeId) params.set('theme', String(selectedThemeId));
+    if (limit != null) params.set('limit', String(limit));
+    if (offset != null) params.set('offset', String(offset));
     const q = params.toString();
     return q ? '/photoset-configs?' + q : '/photoset-configs';
   }
@@ -408,7 +414,7 @@
     }
     const shuffled = shuffle(withPhoto);
     const dims = dimensions || dimensionsCache;
-    el.innerHTML =
+    const html =
       '<div class="masonry">' +
       shuffled.map((p) => {
         const imgUrl = imageUrl(p.Image);
@@ -422,6 +428,8 @@
         );
       }).join('') +
       '</div>';
+
+    el.innerHTML = html;
 
     el.querySelectorAll('.card').forEach((card) => {
       const id = parseInt(card.dataset.id, 10);
@@ -463,40 +471,69 @@
     });
   }
 
-  async function fetchPresetsAndRender() {
+  async function fetchPresetsPage(reset = false) {
     const content = document.getElementById('content');
-    content.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка идей...</div>';
+    if (reset) {
+      presetsState = { items: [], offset: 0, hasMore: true, loading: false };
+      dimensionsCache = {};
+      content.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка идей...</div>';
+    }
+    if (!presetsState.hasMore || presetsState.loading) return;
+    presetsState.loading = true;
     try {
-      const presets = await api(buildPresetsQuery());
-      const withPhoto = (presets || []).filter((p) => p.Image && String(p.Image).trim());
+      const limit = 30;
+      const data = await api(buildPresetsQuery(limit, presetsState.offset));
+      const items = Array.isArray(data) ? data : (data.items || []);
+      const hasMore = typeof data.hasMore === 'boolean' ? data.hasMore : items.length === limit;
+      presetsState.items = presetsState.items.concat(items);
+      presetsState.offset += items.length;
+      presetsState.hasMore = hasMore;
+
+      const withPhoto = presetsState.items.filter((p) => p.Image && String(p.Image).trim());
       const idsToLoad = withPhoto.filter((p) => !dimensionsCache[p.Id]).map((p) => p.Id);
       for (const id of idsToLoad) {
-        const p = presets.find((x) => x.Id === id);
+        const p = presetsState.items.find((x) => x.Id === id);
         if (p && p.Image) {
           const d = await loadImageDimensions(imageUrl(p.Image));
           dimensionsCache[id] = d;
         }
       }
-      render(presets, dimensionsCache);
+      render(presetsState.items, dimensionsCache);
     } catch (err) {
       content.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
+    } finally {
+      presetsState.loading = false;
     }
   }
 
-  async function fetchPhotosetsAndRender() {
+  async function fetchPhotosetsPage(reset = false) {
     const content = document.getElementById('content');
-    content.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка фотосетов...</div>';
+    if (reset) {
+      photosetsState = { items: [], offset: 0, hasMore: true, loading: false };
+      content.innerHTML = '<div class="loading"><div class="spinner"></div>Загрузка фотосессий...</div>';
+    }
+    if (!photosetsState.hasMore || photosetsState.loading) return;
+    photosetsState.loading = true;
     try {
-      const configs = await api(buildPhotosetConfigsQuery());
-      renderPhotosets(configs);
+      const limit = 30;
+      const data = await api(buildPhotosetConfigsQuery(limit, photosetsState.offset));
+      const items = Array.isArray(data) ? data : (data.items || []);
+      const hasMore = typeof data.hasMore === 'boolean' ? data.hasMore : items.length === limit;
+      photosetsState.items = photosetsState.items.concat(items);
+      photosetsState.offset += items.length;
+      photosetsState.hasMore = hasMore;
+
+      renderPhotosets(photosetsState.items);
     } catch (err) {
       content.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
+    } finally {
+      photosetsState.loading = false;
     }
   }
 
   function loadCurrentMode() {
-    if (mode === 'presets') fetchPresetsAndRender();
-    else fetchPhotosetsAndRender();
+    if (mode === 'presets') fetchPresetsPage(true);
+    else fetchPhotosetsPage(true);
   }
 
   document.getElementById('mode-tabs').addEventListener('click', (e) => {
@@ -506,6 +543,16 @@
     document.querySelectorAll('.mode-tab').forEach((t) => t.classList.remove('active'));
     tab.classList.add('active');
     loadCurrentMode();
+  });
+
+  // Infinite scroll: load next page when near bottom
+  window.addEventListener('scroll', () => {
+    const scrollPos = window.scrollY + window.innerHeight;
+    const threshold = document.documentElement.scrollHeight - 400;
+    if (scrollPos >= threshold) {
+      if (mode === 'presets') fetchPresetsPage(false);
+      else fetchPhotosetsPage(false);
+    }
   });
 
   (async () => {
