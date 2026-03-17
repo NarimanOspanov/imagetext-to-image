@@ -614,7 +614,12 @@ function registerHandlers(bot, options = {}) {
 
   bot.action('start_want_picture', async (ctx) => {
     await ctx.answerCbQuery();
-    await ctx.reply('Отправь текст с описанием картинки или фото — и я создам изображение.');
+    await ctx.reply(
+      '📸 Пришли в одном сообщении: фотографию и описание того, что нужно с ней сделать.\n\n' +
+      'Не знаешь, что написать? Смотри идеи 👉 https://t.me/rabota_5g\n\n' +
+      'Жду фото и описание 👇\n\n' +
+      '💡 Для продвинутых: команда /model — выбор модели вручную.'
+    );
   });
 
   bot.command('ideas', async (ctx) => {
@@ -884,7 +889,7 @@ function registerHandlers(bot, options = {}) {
       ],
       [
         {
-          text: 'Создать фотосессию',
+          text: 'Выбрать фотосессию',
           callback_data: `photoset_create_${current.Id}`,
         },
       ],
@@ -2045,12 +2050,12 @@ async function main() {
   // Set menu commands (shown when user taps Menu in bottom-left; emoji = icon next to command)
   const menuCommands = [
     { command: 'start', description: 'ℹ️ Что умеет бот' },
+    { command: 'photosets', description: '📸 Готовые фотосеты' },
+    { command: 'ideas', description: '✨ Идеи для фото' },
     { command: 'account', description: '⚙️ Мой профиль' },
     { command: 'model', description: '✨ Сменить модель' },
     { command: 'pay', description: '💎 Докупить генерации' },
     { command: 'referrals', description: '🎁 Бонусы за друзей' },
-    { command: 'photosets', description: '📸 Готовые фотосеты' },
-    { command: 'ideas', description: '✨ Идеи для фото' },
     { command: 'help', description: '❓ Помощь' },
   ];
   try {
