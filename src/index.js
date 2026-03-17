@@ -363,6 +363,55 @@ async function consumeGenerations(chatId, count) {
         await p.update({ BalanceRemaining: p.BalanceRemaining - use }, { transaction: t });
         left -= use;
       }
+
+/** Try to consume generations and, if недостаточно и count === 1, выдать 1 бонус на сегодня и повторить. */
+async function consumeWithDailyBonus(chatId, count) {
+  const ok = await consumeGenerations(chatId, count);
+  if (ok || count !== 1) return ok;
+
+  // Попробуем выдать 1 ежедневный бонус, если ещё не выдавали сегодня (UTC).
+  const t = await sequelize.transaction();
+  try {
+    const user = await models.Users.findOne({
+      where: { TelegramChatId: chatId },
+      lock: t.LOCK.UPDATE,
+      transaction: t,
+    });
+    if (!user) {
+      await t.rollback();
+      return false;
+    }
+
+    const now = new Date();
+    const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const last = user.LastDailyBonusAt ? new Date(user.LastDailyBonusAt) : null;
+    const alreadyToday =
+      last &&
+      last.getUTCFullYear() === todayUtc.getUTCFullYear() &&
+      last.getUTCMonth() === todayUtc.getUTCMonth() &&
+      last.getUTCDate() === todayUtc.getUTCDate();
+
+    if (alreadyToday) {
+      await t.rollback();
+      return false;
+    }
+
+    await user.update(
+      {
+        FreeGenerationsRemaining: Math.max(0, user.FreeGenerationsRemaining ?? 0) + 1,
+        LastDailyBonusAt: now,
+      },
+      { transaction: t }
+    );
+    await t.commit();
+  } catch (err) {
+    await t.rollback();
+    console.error("consumeWithDailyBonus daily bonus error:", err);
+    return false;
+  }
+
+  // Повторяем попытку списания 1 генерации уже с учётом бонуса.
+  return consumeGenerations(chatId, count);
     }
     await t.commit();
     return left === 0;
@@ -977,7 +1026,7 @@ function registerHandlers(bot, options = {}) {
       await updateGenerationAuditSuccess(auditId, fileName);
       await ctx.telegram.deleteMessage(chatId, processingMsg.message_id).catch(() => {});
       await ctx.replyWithPhoto({ source: images[0], filename: 'image.png' });
-      await consumeGenerations(chatId, 1);
+      await consumeWithDailyBonus(chatId, 1);
       await recordImageGenerations(chatId, 1);
     } catch (err) {
       console.error('Preset generation error:', err);

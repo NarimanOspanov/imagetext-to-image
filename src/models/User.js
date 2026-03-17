@@ -52,6 +52,10 @@ export default function defineUser(sequelize) {
         allowNull: false,
         defaultValue: 20,
       },
+      LastDailyBonusAt: {
+        type: DataTypes.DATE,
+        allowNull: true,
+      },
     },
     {
       tableName: 'Users',
