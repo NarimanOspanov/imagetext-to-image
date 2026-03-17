@@ -81,7 +81,7 @@
       border: 1px solid rgba(255,255,255,.06);
     }
     .card:hover {
-      transform: translateY(-4px) scale(1.02);
+      transform: translateY(-4px) scale(1.06);
       box-shadow: var(--shadow-hover);
     }
     .card:active {
@@ -404,12 +404,10 @@
       '<div class="masonry">' +
       list.map((c) => {
         const coverUrl = photosetCoverUrl(c.Image);
-        const name = escapeHtml(c.Name || '');
         return (
           '<article class="card" data-config-id="' + c.Id + '" role="button" tabindex="0">' +
           '<div class="card-img-wrap">' +
           (coverUrl ? '<img class="card-img" src="' + coverUrl + '" alt="" loading="lazy" />' : '') +
-          '<span class="card-title">' + name + '</span>' +
           '</div>' +
           '</article>'
         );

@@ -972,7 +972,8 @@ function registerHandlers(bot, options = {}) {
     const prompt = preset.Prompt;
     const { total } = await getAvailableGenerations(chatId);
     if (total < 1) {
-      await ctx.reply(noGenerationsMessage, noGenerationsReplyMarkup);
+      const msg = await getNoGenerationsMessage();
+      await ctx.reply(msg, noGenerationsReplyMarkup);
       return;
     }
     const stopTyping = startTyping(ctx.telegram, chatId);
@@ -1379,18 +1380,23 @@ function registerHandlers(bot, options = {}) {
   /** User-facing message when Gemini blocks due to safety/policy (e.g. sexual content). */
   const safetyBlockMessage =
     'Запрос заблокирован фильтрами безопасности. Попробуй другое описание или другое фото.';
-  const noGenerationsMessage =
-    '⛔️ Ты использовал все бесплатные генерации\n\n' +
-    'Каждая картинка стоит нам реальных денег 💸\n' +
-    'Но мы сделали цену в разы ниже, чем у других —\n' +
-    'чтобы ты мог творить без ограничений по оплате 🎨\n\n' +
-    '🤝 Приведи друга — за каждого приглашённого друга тебе начислят бонусные генерации. Поделись ссылкой из раздела «Бонусы за друзей» (/referrals).\n\n' +
-    '💎 Подключи Alexa Premium и получи:\n' +
-    '• без ограничений по оплате и пробуй всё, что приходит в голову\n' +
-    '• HD-качество и точность\n' +
-    '• поддержку, идеи и вдохновение в любое время\n' +
-    '• PRO-режим\n\n' +
-    'и всё это — дешевле чашки кофе ☕️';
+
+  async function getNoGenerationsMessage() {
+    const generationsPerReferral = Math.max(1, await getConfigInt('GenerationsPerReferral', 1));
+    const genWord =
+      generationsPerReferral === 1
+        ? 'генерацию'
+        : generationsPerReferral >= 2 && generationsPerReferral <= 4
+        ? 'генерации'
+        : 'генераций';
+    return (
+      '⛔️ Ты использовал все бесплатные генерации\n\n' +
+      'Каждая картинка стоит нам реальных денег 💸\n\n' +
+      `🤝 Приведи друга — за каждого приглашённого друга тебе начислят ${generationsPerReferral} ${genWord}. Поделись ссылкой из раздела «Бонусы за друзей» (/referrals).\n\n` +
+      '💎 Докупить генерации'
+    );
+  }
+
   const noGenerationsReplyMarkup = {
     reply_markup: {
       inline_keyboard: [
@@ -1409,7 +1415,8 @@ function registerHandlers(bot, options = {}) {
     const needed = config.maxImagesPerRequest;
     const { total } = await getAvailableGenerations(ctx.chat.id);
     if (total < needed) {
-      return ctx.reply(noGenerationsMessage, noGenerationsReplyMarkup);
+      const msg = await getNoGenerationsMessage();
+      return ctx.reply(msg, noGenerationsReplyMarkup);
     }
 
     const stopTyping = startTyping(ctx.telegram, ctx.chat.id);
@@ -1479,7 +1486,8 @@ function registerHandlers(bot, options = {}) {
     const { total } = await getAvailableGenerations(chatId);
     const needed = prompts.length;
     if (total < needed) {
-      await ctx.reply(noGenerationsMessage, noGenerationsReplyMarkup);
+      const msg = await getNoGenerationsMessage();
+      await ctx.reply(msg, noGenerationsReplyMarkup);
       return;
     }
 
@@ -1622,7 +1630,8 @@ function registerHandlers(bot, options = {}) {
 
     const { total } = await getAvailableGenerations(chatId);
     if (total < 1) {
-      await ctx.reply(noGenerationsMessage, noGenerationsReplyMarkup);
+      const msg = await getNoGenerationsMessage();
+      await ctx.reply(msg, noGenerationsReplyMarkup);
       return;
     }
 
@@ -1739,7 +1748,8 @@ function registerHandlers(bot, options = {}) {
 
     const { total } = await getAvailableGenerations(ctx.chat.id);
     if (total < 1) {
-      return ctx.reply(noGenerationsMessage, noGenerationsReplyMarkup);
+      const msg = await getNoGenerationsMessage();
+      return ctx.reply(msg, noGenerationsReplyMarkup);
     }
 
     const stopTyping = startTyping(ctx.telegram, ctx.chat.id);
