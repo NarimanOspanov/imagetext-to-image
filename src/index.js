@@ -580,17 +580,20 @@ function registerHandlers(bot, options = {}) {
       const welcomeText =
         'Привет 👋\n\n' +
         'Я Alexa — твой AI-фотограф.\n\n' +
-        'Создаю реалистичные, стильные портреты, как после съёмки у топового фотографа ✨\n\n' +
-        'Загрузите фото и короткое описание образа, и я покажу вашу лучшую версию.\n\n' +
+        'Создаю реалистичные, стильные фотосессии, как после съёмки у топового фотографа ✨\n\n' +
+        'Я могу:\n' +
+        '1. сделать вам фотосессию на основе готовых шаблонов\n' +
+        '2. изменить фотографию или сгенерировать картинку по вашей просьбе\n' +
+        '3. научить работать с промтами\n\n' +
         'Выбери, что хочешь сделать';
       const startButtons = [
-        [{ text: '📸 Выбрать фотосессию', callback_data: 'start_photosets' }],
-        [{ text: '🖼 Сделать красивую картинку', callback_data: 'start_want_picture' }],
+        [{ text: '📸 Ознакомиться с фотосессиями', callback_data: 'start_photosets' }],
+        [{ text: '🖼 Изменить или сделать картинку', callback_data: 'start_want_picture' }],
+        [{ text: '📘 Научиться работать с промтами', url: 'https://t.me/rabota_5g' }],
       ];
       if (ideasAppUrl) {
-        startButtons.push([{ text: '✨ Идеи для фото', web_app: { url: ideasAppUrl } }]);
+        startButtons.push([{ text: '✨ Выбрать идею для фото', web_app: { url: ideasAppUrl } }]);
       }
-      startButtons.push([{ text: '💎 Посмотреть идеи на канале', url: 'https://t.me/rabota_5g' }]);
       const replyMarkup = {
         reply_markup: { inline_keyboard: startButtons },
       };
@@ -692,7 +695,7 @@ function registerHandlers(bot, options = {}) {
   bot.action('help_payment_not_open', async (ctx) => {
     await ctx.answerCbQuery();
     await ctx.reply(
-      'Если окно оплаты не открывается, попробуй обновить приложение Telegram или оплатить с другого устройства. Если проблема сохраняется — напиши нам: @great_future'
+      'Если окно оплаты не открывается, попробуй обновить приложение Telegram или оплатить с другого устройства. Если проблема сохраняется — напиши нам: @nariman_ovv'
     );
   });
 
