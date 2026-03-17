@@ -443,7 +443,7 @@
       }
     }
     try {
-      const limit = 30;
+      const limit = 16;
       const data = await api(buildPresetsQuery(limit, presetsState.offset));
       const items = Array.isArray(data) ? data : (data.items || []);
       const hasMore = typeof data.hasMore === 'boolean' ? data.hasMore : items.length === limit;
@@ -487,7 +487,7 @@
       }
     }
     try {
-      const limit = 30;
+      const limit = 16;
       const data = await api(buildPhotosetConfigsQuery(limit, photosetsState.offset));
       const items = Array.isArray(data) ? data : (data.items || []);
       const hasMore = typeof data.hasMore === 'boolean' ? data.hasMore : items.length === limit;
@@ -521,7 +521,7 @@
   // Infinite scroll: load next page when near bottom
   window.addEventListener('scroll', () => {
     const scrollPos = window.scrollY + window.innerHeight;
-    const threshold = document.documentElement.scrollHeight - 400;
+    const threshold = document.documentElement.scrollHeight - 800; // start loading earlier
     if (scrollPos >= threshold) {
       if (mode === 'presets') fetchPresetsPage(false);
       else fetchPhotosetsPage(false);
