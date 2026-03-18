@@ -248,6 +248,157 @@ async function getConfigInt(key, defaultVal = 0) {
   }
 }
 
+function formatUsdCents(amount) {
+  const cents = Number(amount) || 0;
+  const sign = cents < 0 ? '-' : '';
+  const abs = Math.abs(cents);
+  const dollars = Math.floor(abs / 100);
+  const rem = abs % 100;
+  return `${sign}$${dollars}.${String(rem).padStart(2, '0')}`;
+}
+
+async function refreshReferralEarningsAvailability(beneficiaryUserId) {
+  const where = { Status: 'pending', HoldUntilUtc: { [Op.lte]: new Date() } };
+  if (beneficiaryUserId) where.BeneficiaryUserId = beneficiaryUserId;
+  await models.ReferralEarnings.update({ Status: 'available' }, { where });
+}
+
+async function getReferralEarningsSummary(beneficiaryUserId) {
+  await refreshReferralEarningsAvailability(beneficiaryUserId);
+  const rows = await models.ReferralEarnings.findAll({
+    where: { BeneficiaryUserId: beneficiaryUserId },
+    attributes: ['Status', [Sequelize.fn('SUM', Sequelize.col('AmountUsdCents')), 'sum']],
+    group: ['Status'],
+    raw: true,
+  });
+  const byStatus = {};
+  for (const r of rows) {
+    const st = r.Status;
+    const sum = Number(r.sum) || 0;
+    byStatus[st] = sum;
+  }
+  return {
+    pending: byStatus.pending || 0,
+    available: byStatus.available || 0,
+    reserved: byStatus.reserved || 0,
+    paid: byStatus.paid || 0,
+    void: byStatus.void || 0,
+  };
+}
+
+async function requestPayoutForUser(userId, minUsdCents = 5000) {
+  if (!userId) return { ok: false, error: 'Missing userId' };
+  const summary = await getReferralEarningsSummary(userId);
+  const available = summary.available || 0;
+  if (available < minUsdCents) {
+    return { ok: false, error: 'Below minimum', availableUsdCents: available, minUsdCents };
+  }
+
+  const existing = await models.PayoutRequests.findOne({
+    where: { UserId: userId, Status: 'requested' },
+    order: [['RequestedAtUtc', 'DESC']],
+  });
+  if (existing) {
+    return { ok: false, error: 'Already requested' };
+  }
+
+  const now = new Date();
+  const reqRow = await models.PayoutRequests.create({
+    UserId: userId,
+    RequestedAmountUsdCents: available,
+    Status: 'requested',
+    RequestedAtUtc: now,
+  });
+
+  await models.ReferralEarnings.update(
+    { Status: 'reserved' },
+    { where: { BeneficiaryUserId: userId, Status: 'available' } }
+  );
+
+  return { ok: true, requestId: reqRow.Id, requestedUsdCents: available };
+}
+
+function parseUsdToCents(value) {
+  if (value == null) return null;
+  const str = String(value).trim();
+  if (!str) return null;
+  const m = str.match(/(\d+(?:[.,]\d+)?)/);
+  if (!m) return null;
+  const num = Number(m[1].replace(',', '.'));
+  if (!Number.isFinite(num) || num <= 0) return null;
+  return Math.round(num * 100);
+}
+
+async function getPricingUsdCents(pricing) {
+  if (!pricing) return null;
+  const direct = pricing.PriceUsdCents;
+  if (direct != null && Number.isFinite(Number(direct)) && Number(direct) > 0) return Number(direct);
+  const parsed = parseUsdToCents(pricing.PriceUSD);
+  return parsed;
+}
+
+async function getParentReferrerUserId(referredUserId) {
+  if (!referredUserId) return null;
+  const row = await models.Referrals.findOne({
+    where: { ReferredUserId: referredUserId },
+    attributes: ['ReferrerUserId', 'ReferredAt', 'Id'],
+    order: [
+      ['ReferredAt', 'ASC'],
+      ['Id', 'ASC'],
+    ],
+  });
+  return row?.ReferrerUserId ?? null;
+}
+
+async function createCommissionEarnings({ buyerUserId, telegramPaymentId, pricing, paidAtUtc }) {
+  if (!buyerUserId || !telegramPaymentId || !pricing || !paidAtUtc) return;
+
+  const baseUsdCents = await getPricingUsdCents(pricing);
+  if (!baseUsdCents) {
+    console.warn('Referral earnings: missing PriceUsdCents/PriceUSD for pricing', pricing?.Id);
+    return;
+  }
+
+  const level1UserId = await getParentReferrerUserId(buyerUserId);
+  if (!level1UserId) return;
+
+  const level2UserId = await getParentReferrerUserId(level1UserId);
+
+  const beneficiaries = [];
+  beneficiaries.push({ userId: level1UserId, level: 1, percentBps: 3000 });
+  if (level2UserId && level2UserId !== level1UserId && level2UserId !== buyerUserId) {
+    beneficiaries.push({ userId: level2UserId, level: 2, percentBps: 2000 });
+  }
+
+  const holdUntil = new Date(paidAtUtc.getTime() + 48 * 60 * 60 * 1000);
+  const createdAtUtc = new Date();
+
+  for (const b of beneficiaries) {
+    const amount = Math.floor((baseUsdCents * b.percentBps) / 10000);
+    if (amount <= 0) continue;
+    try {
+      await models.ReferralEarnings.create({
+        BeneficiaryUserId: b.userId,
+        SourceUserId: buyerUserId,
+        TelegramPaymentId: telegramPaymentId,
+        PricingId: pricing.Id,
+        Level: b.level,
+        PercentBps: b.percentBps,
+        AmountUsdCents: amount,
+        Status: 'pending',
+        HoldUntilUtc: holdUntil,
+        CreatedAtUtc: createdAtUtc,
+      });
+    } catch (e) {
+      if (e?.name === 'SequelizeUniqueConstraintError') {
+        // idempotency: ignore duplicates
+        continue;
+      }
+      console.error('ReferralEarnings create error:', e?.message ?? e);
+    }
+  }
+}
+
 /** Initial free generations for new users (from Config.GenerationsPerRegistration). */
 async function getGenerationsPerRegistration() {
   return Math.max(0, await getConfigInt('GenerationsPerRegistration', 5));
@@ -1258,43 +1409,79 @@ function registerHandlers(bot, options = {}) {
       if (ctx.callbackQuery) await ctx.answerCbQuery();
       const chatId = ctx.chat?.id;
       const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
-    const generationsPerReferral = Math.max(1, await getConfigInt('GenerationsPerReferral', 1));
-    const invited = user
-      ? await models.Referrals.count({ where: { ReferrerUserId: user.Id } })
-      : 0;
-    const bonusesReceived = invited * generationsPerReferral;
-    const referralLink =
-      botUsername && chatId
-        ? `https://t.me/${botUsername}?start=${chatId}`
-        : '(настрой BOT_USERNAME)';
-    const REFERRAL_TEMPLATE =
-      'Привет\nЕсли хочешь сделать фотосессию через искусственный интеллект, рекомендую этого бота. В ссылке промокод на бесплатные генерации';
-    // Телеграм сам подставляет ссылку из параметра url в первую строку сообщения,
-    // поэтому в text отправляем только описание, без повторной ссылки.
-    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(
-      referralLink
-    )}&text=${encodeURIComponent(REFERRAL_TEMPLATE)}`;
-    const genWord = generationsPerReferral === 1 ? 'генерацию' : (generationsPerReferral >= 2 && generationsPerReferral <= 4 ? 'генерации' : 'генераций');
-    const text =
-      `🤝 Приглашай друзей — получай +${generationsPerReferral} ${genWord} за каждого!\n\n` +
-      'Хочешь больше генераций бесплатно? Просто приглашай друзей 👋\n\n' +
-      'Твоя реферальная программа:\n' +
-      `👥 Приглашено друзей: ${invited}\n` +
-      `🎁 Получено бонусных генераций: ${bonusesReceived}\n\n` +
-      'Ваша персональная ссылка:\n' +
-      referralLink;
+      const generationsPerReferral = Math.max(1, await getConfigInt('GenerationsPerReferral', 1));
+      const enableBonusGens = (await getConfigInt('EnableReferralBonusGenerations', 1)) !== 0;
+      const invited = user
+        ? await models.Referrals.count({ where: { ReferrerUserId: user.Id } })
+        : 0;
+      const bonusesReceived = invited * generationsPerReferral;
+      const referralLink =
+        botUsername && chatId
+          ? `https://t.me/${botUsername}?start=${chatId}`
+          : '(настрой BOT_USERNAME)';
+
+      const REFERRAL_TEMPLATE =
+        'Привет\nЕсли хочешь сделать фотосессию через искусственный интеллект, рекомендую этого бота. В ссылке промокод на бонусы.';
+      // Телеграм сам подставляет ссылку из параметра url в первую строку сообщения,
+      // поэтому в text отправляем только описание, без повторной ссылки.
+      const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(
+        referralLink
+      )}&text=${encodeURIComponent(REFERRAL_TEMPLATE)}`;
+
+      const genWord =
+        generationsPerReferral === 1
+          ? 'генерацию'
+          : generationsPerReferral >= 2 && generationsPerReferral <= 4
+          ? 'генерации'
+          : 'генераций';
+
+      const earnings = user ? await getReferralEarningsSummary(user.Id) : null;
+      const minPayoutUsdCents = 5000;
+
+      const parts = [];
+      parts.push('🤝 Реферальная программа\n');
+      parts.push(
+        'Правила:\n' +
+          '— 30% с оплат приглашённых тобой\n' +
+          '— 20% с оплат приглашённых твоими друзьями\n' +
+          '— ожидание 48 часов перед выплатой\n' +
+          `— минимальная выплата: ${formatUsdCents(minPayoutUsdCents)}\n` +
+          '— выплаты вручную по запросу, до 48 часов\n'
+      );
+      parts.push('Хочешь зарабатывать вместе с Alexa? Приглашай друзей по ссылке ниже.\n');
+      parts.push('Ваша персональная ссылка:\n' + referralLink + '\n');
+      parts.push(`👥 Приглашено друзей: ${invited}`);
+      if (enableBonusGens) {
+        parts.push(`🎁 Бонус за друга: +${generationsPerReferral} ${genWord}`);
+        parts.push(`🎁 Получено бонусных генераций: ${bonusesReceived}`);
+      }
+      if (earnings) {
+        parts.push('');
+        parts.push('💰 Доход по рефералам (USD):');
+        parts.push(`— Доступно: ${formatUsdCents(earnings.available)}`);
+        parts.push(`— В ожидании (48ч): ${formatUsdCents(earnings.pending)}`);
+        parts.push(`— В обработке заявки: ${formatUsdCents(earnings.reserved)}`);
+        parts.push(`— Выплачено: ${formatUsdCents(earnings.paid)}`);
+      }
+
+      const text = parts.join('\n');
+
+      const inline_keyboard = [
+        [
+          {
+            text: '🔥 Пригласить друга',
+            url: shareUrl,
+          },
+        ],
+      ];
+      if (user) {
+        inline_keyboard.push([{ text: '💸 Запросить выплату', callback_data: 'withdraw_request' }]);
+      }
 
       await ctx.reply(text, {
         disable_web_page_preview: true,
         reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: '🔥 Пригласить друга',
-                url: shareUrl,
-              },
-            ],
-          ],
+          inline_keyboard,
         },
       });
     } finally {
@@ -1304,6 +1491,62 @@ function registerHandlers(bot, options = {}) {
 
   bot.command('referrals', sendReferralScreen);
   bot.action('pay_referrals', sendReferralScreen);
+  bot.command('withdraw', async (ctx) => {
+    const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
+    try {
+      const chatId = ctx.chat?.id;
+      const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
+      if (!user) return ctx.reply('Сначала отправь /start.');
+      const minPayoutUsdCents = 5000;
+      const res = await requestPayoutForUser(user.Id, minPayoutUsdCents);
+      if (res.ok) {
+        return ctx.reply(
+          `✅ Заявка на выплату принята.\nСумма: ${formatUsdCents(res.requestedUsdCents)}\nСрок обработки: до 48 часов.`
+        );
+      }
+      if (res.error === 'Already requested') {
+        return ctx.reply('⏳ Заявка уже отправлена. Мы обработаем её в течение 48 часов.');
+      }
+      if (res.error === 'Below minimum') {
+        return ctx.reply(
+          `Минимальная сумма для выплаты: ${formatUsdCents(res.minUsdCents)}.\n` +
+            `Сейчас доступно: ${formatUsdCents(res.availableUsdCents)}.`
+        );
+      }
+      return ctx.reply('Не удалось создать заявку. Попробуй позже.');
+    } finally {
+      stopTyping();
+    }
+  });
+
+  bot.action('withdraw_request', async (ctx) => {
+    const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
+    try {
+      if (ctx.callbackQuery) await ctx.answerCbQuery();
+      const chatId = ctx.chat?.id;
+      const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
+      if (!user) return ctx.reply('Сначала отправь /start.');
+      const minPayoutUsdCents = 5000;
+      const res = await requestPayoutForUser(user.Id, minPayoutUsdCents);
+      if (res.ok) {
+        return ctx.reply(
+          `✅ Заявка на выплату принята.\nСумма: ${formatUsdCents(res.requestedUsdCents)}\nСрок обработки: до 48 часов.`
+        );
+      }
+      if (res.error === 'Already requested') {
+        return ctx.reply('⏳ Заявка уже отправлена. Мы обработаем её в течение 48 часов.');
+      }
+      if (res.error === 'Below minimum') {
+        return ctx.reply(
+          `Минимальная сумма для выплаты: ${formatUsdCents(res.minUsdCents)}.\n` +
+            `Сейчас доступно: ${formatUsdCents(res.availableUsdCents)}.`
+        );
+      }
+      return ctx.reply('Не удалось создать заявку. Попробуй позже.');
+    } finally {
+      stopTyping();
+    }
+  });
 
   // —— Pre-checkout: confirm payment ——
   bot.on('pre_checkout_query', async (ctx) => {
@@ -1375,6 +1618,19 @@ function registerHandlers(bot, options = {}) {
       BalanceRemaining: pricing.GenerationsCount,
       TelegramPaymentId: telegramPayment.Id,
     });
+
+    // Referral revenue-share (2-level). Commissions are held for 48h before becoming available.
+    try {
+      await createCommissionEarnings({
+        buyerUserId: user.Id,
+        telegramPaymentId: telegramPayment.Id,
+        pricing,
+        paidAtUtc: paidAt,
+      });
+    } catch (e) {
+      console.error('createCommissionEarnings error:', e?.message ?? e);
+    }
+
     await ctx.reply(
       `✅ Оплата получена! Зачислено ${pricing.GenerationsCount} генераций. Можешь создавать изображения.`
     );

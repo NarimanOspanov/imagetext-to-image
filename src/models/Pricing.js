@@ -41,6 +41,10 @@ export default function definePricing(sequelize) {
       PriceUSD: {
         type: DataTypes.STRING(100),
         allowNull: false,
+      },
+      PriceUsdCents: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
       }
     },
     {

@@ -5,6 +5,8 @@ import definePricing from './Pricing.js';
 import defineUserPurchase from './UserPurchase.js';
 import defineTelegramPayment from './TelegramPayment.js';
 import defineReferral from './Referral.js';
+import defineReferralEarning from './ReferralEarning.js';
+import definePayoutRequest from './PayoutRequest.js';
 import definePromoCode from './PromoCode.js';
 import definePreset from './Preset.js';
 import definePhotosetConfig from './PhotosetConfig.js';
@@ -30,6 +32,8 @@ export function initModels(sequelize) {
   const UserPurchase = defineUserPurchase(sequelize);
   const TelegramPayment = defineTelegramPayment(sequelize);
   const Referral = defineReferral(sequelize);
+  const ReferralEarning = defineReferralEarning(sequelize);
+  const PayoutRequest = definePayoutRequest(sequelize);
   const PromoCode = definePromoCode(sequelize);
   const Preset = definePreset(sequelize);
   const PhotosetConfig = definePhotosetConfig(sequelize);
@@ -65,6 +69,18 @@ export function initModels(sequelize) {
   Referral.belongsTo(User, { as: 'Referrer', foreignKey: 'ReferrerUserId' });
   User.hasMany(Referral, { foreignKey: 'ReferredUserId' });
   Referral.belongsTo(User, { as: 'Referred', foreignKey: 'ReferredUserId' });
+
+  User.hasMany(ReferralEarning, { foreignKey: 'BeneficiaryUserId' });
+  ReferralEarning.belongsTo(User, { as: 'Beneficiary', foreignKey: 'BeneficiaryUserId' });
+  User.hasMany(ReferralEarning, { foreignKey: 'SourceUserId' });
+  ReferralEarning.belongsTo(User, { as: 'SourceUser', foreignKey: 'SourceUserId' });
+  TelegramPayment.hasMany(ReferralEarning, { foreignKey: 'TelegramPaymentId' });
+  ReferralEarning.belongsTo(TelegramPayment, { foreignKey: 'TelegramPaymentId' });
+  Pricing.hasMany(ReferralEarning, { foreignKey: 'PricingId' });
+  ReferralEarning.belongsTo(Pricing, { foreignKey: 'PricingId' });
+
+  User.hasMany(PayoutRequest, { foreignKey: 'UserId' });
+  PayoutRequest.belongsTo(User, { foreignKey: 'UserId' });
 
   User.hasMany(PromoCode, { foreignKey: 'OwnerUserId' });
   PromoCode.belongsTo(User, { as: 'Owner', foreignKey: 'OwnerUserId' });
@@ -133,6 +149,8 @@ export function initModels(sequelize) {
     UserPurchase,
     TelegramPayment,
     Referral,
+    ReferralEarning,
+    PayoutRequest,
     Preset,
     PhotosetConfig,
     Photoset,
@@ -144,6 +162,8 @@ export function initModels(sequelize) {
     UserPurchases: UserPurchase,
     TelegramPayments: TelegramPayment,
     Referrals: Referral,
+    ReferralEarnings: ReferralEarning,
+    PayoutRequests: PayoutRequest,
     PromoCodes: PromoCode,
     Presets: Preset,
     PhotosetConfigs: PhotosetConfig,

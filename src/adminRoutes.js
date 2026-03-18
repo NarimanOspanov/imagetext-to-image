@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { createHmac, randomUUID } from 'node:crypto';
 import { BlobServiceClient } from '@azure/storage-blob';
 import { GoogleGenAI } from '@google/genai';
+import { Op } from 'sequelize';
 import { config } from './config.js';
 import { sequelize, models } from './db.js';
 
@@ -297,6 +298,118 @@ router.get('/stats', adminAuth, async (req, res) => {
   } catch (err) {
     console.error('Admin GET /stats:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Referral payouts (manual) ────────────────────────────────────────────────
+router.get('/referral/payout-requests', adminAuth, async (_req, res) => {
+  try {
+    // Refresh pending -> available globally
+    await models.ReferralEarnings.update(
+      { Status: 'available' },
+      { where: { Status: 'pending', HoldUntilUtc: { [Op.lte]: new Date() } } }
+    );
+
+    const requests = await models.PayoutRequests.findAll({
+      order: [['RequestedAtUtc', 'DESC']],
+      include: [{ model: models.Users, attributes: ['Id', 'TelegramChatId', 'TelegramUserName'] }],
+    });
+
+    res.json(requests);
+  } catch (err) {
+    console.error('Admin GET /referral/payout-requests:', err);
+    res.status(500).json({ error: err?.message ?? String(err) });
+  }
+});
+
+router.get('/referral/earnings-summary/:userId', adminAuth, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId, 10);
+    if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: 'Invalid userId' });
+
+    await models.ReferralEarnings.update(
+      { Status: 'available' },
+      { where: { Status: 'pending', HoldUntilUtc: { [Op.lte]: new Date() }, BeneficiaryUserId: userId } }
+    );
+
+    const rows = await models.ReferralEarnings.findAll({
+      where: { BeneficiaryUserId: userId },
+      attributes: ['Status', [sequelize.fn('SUM', sequelize.col('AmountUsdCents')), 'sum']],
+      group: ['Status'],
+      raw: true,
+    });
+    const byStatus = {};
+    for (const r of rows) byStatus[r.Status] = Number(r.sum) || 0;
+
+    res.json({
+      pending: byStatus.pending || 0,
+      available: byStatus.available || 0,
+      reserved: byStatus.reserved || 0,
+      paid: byStatus.paid || 0,
+      void: byStatus.void || 0,
+    });
+  } catch (err) {
+    console.error('Admin GET /referral/earnings-summary/:userId:', err);
+    res.status(500).json({ error: err?.message ?? String(err) });
+  }
+});
+
+router.post('/referral/payout-requests/:id/mark-paid', adminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid id' });
+    const note = req.body?.note != null ? String(req.body.note).slice(0, 500) : null;
+
+    const row = await models.PayoutRequests.findByPk(id);
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    if (row.Status !== 'requested') return res.status(409).json({ error: 'Already processed' });
+
+    await sequelize.transaction(async (t) => {
+      await models.PayoutRequests.update(
+        { Status: 'paid', ProcessedAtUtc: new Date(), AdminNote: note },
+        { where: { Id: id }, transaction: t }
+      );
+      await models.ReferralEarnings.update(
+        { Status: 'paid' },
+        { where: { BeneficiaryUserId: row.UserId, Status: 'reserved' }, transaction: t }
+      );
+    });
+
+    const updated = await models.PayoutRequests.findByPk(id);
+    res.json({ ok: true, request: updated });
+  } catch (err) {
+    console.error('Admin POST /referral/payout-requests/:id/mark-paid:', err);
+    res.status(500).json({ error: err?.message ?? String(err) });
+  }
+});
+
+router.post('/referral/payout-requests/:id/reject', adminAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid id' });
+    const note = req.body?.note != null ? String(req.body.note).slice(0, 500) : null;
+
+    const row = await models.PayoutRequests.findByPk(id);
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    if (row.Status !== 'requested') return res.status(409).json({ error: 'Already processed' });
+
+    await sequelize.transaction(async (t) => {
+      await models.PayoutRequests.update(
+        { Status: 'rejected', ProcessedAtUtc: new Date(), AdminNote: note },
+        { where: { Id: id }, transaction: t }
+      );
+      // Return reserved earnings back to available for the user.
+      await models.ReferralEarnings.update(
+        { Status: 'available' },
+        { where: { BeneficiaryUserId: row.UserId, Status: 'reserved' }, transaction: t }
+      );
+    });
+
+    const updated = await models.PayoutRequests.findByPk(id);
+    res.json({ ok: true, request: updated });
+  } catch (err) {
+    console.error('Admin POST /referral/payout-requests/:id/reject:', err);
+    res.status(500).json({ error: err?.message ?? String(err) });
   }
 });
 
