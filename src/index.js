@@ -50,9 +50,11 @@ const IMAGE_MODELS = [
   },
 ];
 
+const DEFAULT_MODEL_ID = 'nano_banana_2';
+
 /** Map our model id (Users.ActiveModel) to Gemini API model id. Env overrides: GEMINI_IMAGE_MODEL, GEMINI_IMAGE_MODEL_PRO, etc. */
 function resolveGeminiModelId(ourModelId) {
-  const id = (ourModelId && String(ourModelId).trim()) || IMAGE_MODELS[0]?.id || 'standard';
+  const id = (ourModelId && String(ourModelId).trim()) || DEFAULT_MODEL_ID;
   const envKey = id === 'standard' ? 'GEMINI_IMAGE_MODEL' : `GEMINI_IMAGE_MODEL_${id.toUpperCase().replace(/-/g, '_')}`;
   const envValue = process.env[envKey] || process.env.GEMINI_IMAGE_MODEL;
   return envValue || config.geminiImageModel;
@@ -228,12 +230,12 @@ async function recordImageGenerations(chatId, imageCount, baseFileName = 'image'
   }
 }
 
-/** Resolve user's ActiveModel to Gemini API model id. Uses IMAGE_MODELS[0].id when user has no selection. */
+/** Resolve user's ActiveModel to Gemini API model id. Uses DEFAULT_MODEL_ID when user has no selection. */
 async function getGeminiModelForUser(chatId) {
   const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
-  const active = user?.ActiveModel || IMAGE_MODELS[0].id;
+  const active = user?.ActiveModel || DEFAULT_MODEL_ID;
   if (!IMAGE_MODELS.some((m) => m.id === active)) {
-    return resolveGeminiModelId(IMAGE_MODELS[0].id);
+    return resolveGeminiModelId(DEFAULT_MODEL_ID);
   }
   return resolveGeminiModelId(active);
 }
@@ -895,7 +897,7 @@ function registerHandlers(bot, options = {}) {
       if (ctx.callbackQuery) await ctx.answerCbQuery();
       const chatId = ctx.chat?.id;
     const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
-    const currentId = user?.ActiveModel || IMAGE_MODELS[0].id;
+    const currentId = user?.ActiveModel || DEFAULT_MODEL_ID;
     const text = IMAGE_MODELS.map((m) => m.description).join('\n\n');
     const buttons = [
       [
@@ -2454,10 +2456,8 @@ async function main() {
   const menuCommands = [
     { command: 'start', description: 'ℹ️ Что умеет бот' },
     { command: 'photosets', description: '📸 Готовые фотосеты' },
-    { command: 'buy', description: '💎 Докупить генерации' },
     { command: 'referrals', description: '🎁 Бонусы за друзей' },
-    { command: 'model', description: '✨ Сменить ИИ модель' },
-    { command: 'account', description: '⚙️ Мой профиль' },
+    { command: 'account', description: 'Мой баланс' },
     { command: 'help', description: '❓ Помощь' },
   ];
   try {
