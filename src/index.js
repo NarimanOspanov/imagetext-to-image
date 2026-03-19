@@ -1206,37 +1206,12 @@ function registerHandlers(bot, options = {}) {
   }
 
   async function getPhotosetCarouselConfigs(selectedConfigId = null) {
-    const [audiences, configsDesc] = await Promise.all([
-      models.Audiences.findAll({
-        attributes: ['Id', 'SortOrder'],
-        order: [['SortOrder', 'ASC'], ['Id', 'ASC']],
-      }),
-      models.PhotosetConfigs.findAll({
-        include: [{ model: models.Audiences, attributes: ['Id'], through: { attributes: [] }, required: false }],
-        order: [['Id', 'DESC']],
-      }),
-    ]);
+    const configsDesc = await models.PhotosetConfigs.findAll({
+      order: [['Id', 'DESC']],
+    });
 
     if (!configsDesc || configsDesc.length === 0) return { configs: [], index: 0 };
-
-    // Pick latest photoset config per audience type.
-    const latestByAudience = new Map();
-    for (const cfg of configsDesc) {
-      for (const aud of cfg.Audiences || []) {
-        if (!latestByAudience.has(aud.Id)) latestByAudience.set(aud.Id, cfg);
-      }
-    }
-
-    const picked = [];
-    const seenConfigIds = new Set();
-    for (const aud of audiences) {
-      const cfg = latestByAudience.get(aud.Id);
-      if (!cfg || seenConfigIds.has(cfg.Id)) continue;
-      seenConfigIds.add(cfg.Id);
-      picked.push(cfg);
-    }
-
-    const configs = (picked.length > 0 ? picked : configsDesc).sort((a, b) => b.Id - a.Id);
+    const configs = configsDesc;
     let index = 0; // start from latest Id by default
 
     if (selectedConfigId != null) {
