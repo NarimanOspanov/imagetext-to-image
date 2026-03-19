@@ -1328,13 +1328,17 @@ function registerHandlers(bot, options = {}) {
       if (!configRow) {
         return ctx.reply('Этот фотосет больше недоступен. Попробуй выбрать другой.');
       }
+      const photosetsCount = await models.Photosets.count({
+        where: { PhotosetConfigId: configId },
+      });
       pendingPhotosets.delete(chatId);
       pendingPresets.delete(chatId);
       pendingPhotosetPreviews.set(chatId, { configId });
       await ctx.reply(
         '🔎 Предпросмотр результата\n\n' +
-          'Отправь 1-3 фото одним сообщением — я сделаю превью в стиле выбранной фотосессии.\n\n' +
-          'Финальный результат после выбора фотосессии будет в HD-качестве.'
+          'Отправь одну или несколько исходных фото людей одним сообщением. Я использую их как основу для этого фотосета.\n\n' +
+          'Это предпросмотр для понимания - финальный результат фотосессии будет лучше, в HD-качестве.\n' +
+          `Вы получите ${Math.max(photosetsCount, 1)} фотографий в отличном качестве.`
       );
     } finally {
       stopTyping();
@@ -1957,7 +1961,10 @@ function registerHandlers(bot, options = {}) {
         {
           caption:
             '✅ Предпросмотр готов.\n' +
-            'Это demo-версия результата. После запуска фотосессии качество будет HD и набор кадров шире.',
+            'Это предпросмотр для понимания - финальный результат фотосессии будет лучше, в HD-качестве.',
+          reply_markup: {
+            inline_keyboard: [[{ text: 'Заказать фотосессию', callback_data: `photoset_create_${configId}` }]],
+          },
         }
       );
     } catch (err) {
