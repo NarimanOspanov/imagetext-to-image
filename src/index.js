@@ -2457,7 +2457,6 @@ async function main() {
   const menuCommands = [
     { command: 'start', description: 'ℹ️ Что умеет бот' },
     { command: 'photosets', description: '📸 Готовые фотосеты' },
-    { command: 'ideas', description: '✨ Идеи для фото' },
     { command: 'buy', description: '💎 Докупить генерации' },
     { command: 'referrals', description: '🎁 Бонусы за друзей' },
     { command: 'model', description: '✨ Сменить ИИ модель' },
