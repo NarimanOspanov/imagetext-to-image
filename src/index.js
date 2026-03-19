@@ -1925,21 +1925,38 @@ function registerHandlers(bot, options = {}) {
         await ctx.reply('Не удалось создать предпросмотр. Попробуй ещё раз.');
         return;
       }
+      const coverBuffer = config.Image ? await downloadBlobBuffer(`PhotosetCovers/${config.Image}`) : null;
 
       await ctx.telegram.deleteMessage(chatId, processingMsg.message_id).catch(() => {});
-      await ctx.replyWithPhoto(
-        { source: images[0], filename: 'preview.png' },
-        {
-          caption:
-            '✅ Предпросмотр готов.\n' +
-            'Это первая фотография из будущего набора.\n' +
-            `Вы получите ${Math.max(photosetsCount, 1)} фотографий.\n` +
-            'Финальный результат фотосессии будет лучше, в HD-качестве.',
-          reply_markup: {
-            inline_keyboard: [[{ text: 'Заказать фотосессию', callback_data: `photoset_create_${configId}` }]],
+      const caption =
+        '✅ Предпросмотр готов.\n' +
+        'Это первая фотография из будущего набора.\n' +
+        `Вы получите ${Math.max(photosetsCount, 1)} фотографий.\n` +
+        'Финальный результат фотосессии будет лучше, в HD-качестве.';
+
+      if (coverBuffer) {
+        await ctx.replyWithMediaGroup([
+          {
+            type: 'photo',
+            media: { source: images[0], filename: 'preview.png' },
+            caption,
           },
-        }
-      );
+          {
+            type: 'photo',
+            media: { source: coverBuffer, filename: config.Image || 'photoset-cover.jpg' },
+          },
+        ]);
+      } else {
+        await ctx.replyWithPhoto(
+          { source: images[0], filename: 'preview.png' },
+          { caption }
+        );
+      }
+      await ctx.reply('Выбери следующее действие 👇', {
+        reply_markup: {
+          inline_keyboard: [[{ text: 'Заказать фотосессию', callback_data: `photoset_create_${configId}` }]],
+        },
+      });
     } catch (err) {
       console.error('Photoset preview generation error:', err);
       const text = err?.message?.includes('SAFETY')
