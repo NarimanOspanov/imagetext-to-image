@@ -772,14 +772,15 @@ function registerHandlers(bot, options = {}) {
     await ctx.reply('📸 Пришли в одном сообщении: фотографию и описание того, что нужно с ней сделать.');
   });
 
-  bot.command('ideas', async (ctx) => {
-    if (!ideasAppUrl) return ctx.reply('Идеи пока недоступны.');
-    return ctx.reply('Выбери стиль — откроется галерея. Нажми на картинку, затем отправь своё фото в боте.', {
-      reply_markup: {
-        inline_keyboard: [[{ text: '✨ Открыть идеи для фото', web_app: { url: ideasAppUrl } }]],
-      },
-    });
-  });
+  // Temporarily disabled: /ideas command (can be restored later)
+  // bot.command('ideas', async (ctx) => {
+  //   if (!ideasAppUrl) return ctx.reply('Идеи пока недоступны.');
+  //   return ctx.reply('Выбери стиль — откроется галерея. Нажми на картинку, затем отправь своё фото в боте.', {
+  //     reply_markup: {
+  //       inline_keyboard: [[{ text: '✨ Открыть идеи для фото', web_app: { url: ideasAppUrl } }]],
+  //     },
+  //   });
+  // });
 
   bot.help(async (ctx) => {
     const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
