@@ -796,9 +796,7 @@ function registerHandlers(bot, options = {}) {
         [{ text: '❗ Не открывается оплата', callback_data: 'help_payment_not_open' }],
         [{ text: '⚙️ Как сменить модель', callback_data: 'help_change_model' }],
       ];
-      if (ideasAppUrl) {
-        helpButtons.push([{ text: '✨ Идеи для фото', web_app: { url: ideasAppUrl } }]);
-      }
+      // no "Идеи для фото" button on /help (keeps help screen focused)
       helpButtons.push([{ text: 'Остались вопросы? ➢', url: 'https://t.me/nariman_ovv' }]);
       const replyMarkup = {
         parse_mode: 'Markdown',
@@ -2455,7 +2453,7 @@ async function main() {
     { command: 'start', description: 'ℹ️ Что умеет бот' },
     { command: 'photosets', description: '📸 Готовые фотосеты' },
     { command: 'referrals', description: '🎁 Бонусы за друзей' },
-    { command: 'account', description: 'Мой баланс' },
+    { command: 'account', description: '💳 Мой баланс' },
     { command: 'help', description: '❓ Помощь' },
   ];
   try {
