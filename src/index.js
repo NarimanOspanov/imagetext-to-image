@@ -1196,19 +1196,62 @@ function registerHandlers(bot, options = {}) {
     }
   }
 
+  async function getPhotosetCarouselConfigs(selectedConfigId = null) {
+    const [audiences, configsDesc] = await Promise.all([
+      models.Audiences.findAll({
+        attributes: ['Id', 'SortOrder'],
+        order: [['SortOrder', 'ASC'], ['Id', 'ASC']],
+      }),
+      models.PhotosetConfigs.findAll({
+        include: [{ model: models.Audiences, attributes: ['Id'], through: { attributes: [] }, required: false }],
+        order: [['Id', 'DESC']],
+      }),
+    ]);
+
+    if (!configsDesc || configsDesc.length === 0) return { configs: [], index: 0 };
+
+    // Pick latest photoset config per audience type.
+    const latestByAudience = new Map();
+    for (const cfg of configsDesc) {
+      for (const aud of cfg.Audiences || []) {
+        if (!latestByAudience.has(aud.Id)) latestByAudience.set(aud.Id, cfg);
+      }
+    }
+
+    const picked = [];
+    const seenConfigIds = new Set();
+    for (const aud of audiences) {
+      const cfg = latestByAudience.get(aud.Id);
+      if (!cfg || seenConfigIds.has(cfg.Id)) continue;
+      seenConfigIds.add(cfg.Id);
+      picked.push(cfg);
+    }
+
+    const configs = (picked.length > 0 ? picked : configsDesc).sort((a, b) => b.Id - a.Id);
+    let index = 0; // start from latest Id by default
+
+    if (selectedConfigId != null) {
+      const foundIndex = configs.findIndex((c) => c.Id === selectedConfigId);
+      if (foundIndex >= 0) {
+        index = foundIndex;
+      } else {
+        const explicit = await models.PhotosetConfigs.findByPk(selectedConfigId);
+        if (explicit) {
+          configs.unshift(explicit);
+          index = 0;
+        }
+      }
+    }
+
+    return { configs, index };
+  }
+
   async function sendPhotosetCard(ctx, configId = null) {
     const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
     try {
-      const configs = await models.PhotosetConfigs.findAll({
-        order: [['Id', 'ASC']],
-      });
+      const { configs, index } = await getPhotosetCarouselConfigs(configId);
       if (!configs || configs.length === 0) {
         return ctx.reply('Фотосеты скоро появятся — мы готовим для тебя лучшие подборки.');
-      }
-      let index = 0;
-      if (configId != null) {
-        const foundIndex = configs.findIndex((c) => c.Id === configId);
-        if (foundIndex >= 0) index = foundIndex;
       }
       await showPhotosetCard(ctx, configs, index, 'reply');
     } finally {
@@ -1225,9 +1268,7 @@ function registerHandlers(bot, options = {}) {
     try {
       const targetId = parseInt(ctx.match[2], 10);
       if (ctx.callbackQuery) await ctx.answerCbQuery();
-      const configs = await models.PhotosetConfigs.findAll({
-        order: [['Id', 'ASC']],
-      });
+      const { configs } = await getPhotosetCarouselConfigs(null);
       if (!configs || configs.length === 0) {
         return ctx.reply('Фотосеты скоро появятся — мы готовим для тебя лучшие подборки.');
       }
