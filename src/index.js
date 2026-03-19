@@ -745,9 +745,7 @@ function registerHandlers(bot, options = {}) {
         [{ text: '🖼 Изменить или сделать картинку', callback_data: 'start_want_picture' }],
         [{ text: '📘 Научиться работать с промтами', url: 'https://t.me/rabota_5g' }],
       ];
-      if (ideasAppUrl) {
-        startButtons.push([{ text: '✨ Выбрать идею для фото', web_app: { url: ideasAppUrl } }]);
-      }
+      // remove last button ("Выбрать идею для фото") from /start
       const replyMarkup = {
         reply_markup: { inline_keyboard: startButtons },
       };
