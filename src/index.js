@@ -1513,31 +1513,27 @@ function registerHandlers(bot, options = {}) {
           : 'генераций';
 
       const earnings = user ? await getReferralEarningsSummary(user.Id) : null;
-      const minPayoutUsdCents = 5000;
+      const minPayoutUsdCents = 1000;
 
       const parts = [];
-      parts.push('🤝 Реферальная программа\n');
-      parts.push(
-        'Правила:\n' +
-          '— 30% с оплат приглашённых тобой\n' +
-          '— 20% с оплат приглашённых твоими друзьями\n' +
-          '— ожидание 48 часов перед выплатой\n' +
-          `— минимальная выплата: ${formatUsdCents(minPayoutUsdCents)}\n` +
-          '— выплаты вручную по запросу, до 48 часов\n'
-      );
-      parts.push('Хочешь зарабатывать вместе с Alexa? Приглашай друзей по ссылке ниже.\n');
-      parts.push('Ваша персональная ссылка:\n' + referralLink + '\n');
-      parts.push(`👥 Приглашено друзей: ${invited}`);
+      parts.push('Приглашение пользователей даёт 2 вещи:\n');
       if (enableBonusGens) {
-        parts.push(`🎁 Бонус за друга: +${generationsPerReferral} ${genWord}`);
-        parts.push(`🎁 Получено бонусных генераций: ${bonusesReceived}`);
+        parts.push(`1. Бесплатные ${generationsPerReferral} ${genWord} за каждого приглашенного пользователя\n`);
       }
+      parts.push('2. Реальные деньги — да, мы делимся выручкой\n');
+      parts.push('— 30% с оплат приглашённых пользователей');
+      parts.push('— 20% с оплат тех, кого пригласили те, кого пригласил ты\n');
+      parts.push('Выплаты:');
+      parts.push(`— Минимум для снятия: ${formatUsdCents(minPayoutUsdCents)}`);
+      parts.push('— Перевод на карту (занимает до 48 часов)\n');
+      parts.push('Приглашай друзей по персональной ссылке');
+      parts.push(referralLink + '\n');
+      parts.push(`👥 Приглашено: ${invited}`);
+      parts.push(`🎁 Бонусные генерации фото: ${enableBonusGens ? bonusesReceived : 0}`);
       if (earnings) {
         parts.push('');
-        parts.push('💰 Доход по рефералам (USD):');
+        parts.push('💰 Доход (USD):');
         parts.push(`— Доступно: ${formatUsdCents(earnings.available)}`);
-        parts.push(`— В ожидании (48ч): ${formatUsdCents(earnings.pending)}`);
-        parts.push(`— В обработке заявки: ${formatUsdCents(earnings.reserved)}`);
         parts.push(`— Выплачено: ${formatUsdCents(earnings.paid)}`);
       }
 
@@ -1574,7 +1570,7 @@ function registerHandlers(bot, options = {}) {
       const chatId = ctx.chat?.id;
       const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
       if (!user) return ctx.reply('Сначала отправь /start.');
-      const minPayoutUsdCents = 5000;
+      const minPayoutUsdCents = 1000;
       const res = await requestPayoutForUser(user.Id, minPayoutUsdCents);
       if (res.ok) {
         return ctx.reply(
@@ -1603,7 +1599,7 @@ function registerHandlers(bot, options = {}) {
       const chatId = ctx.chat?.id;
       const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
       if (!user) return ctx.reply('Сначала отправь /start.');
-      const minPayoutUsdCents = 5000;
+      const minPayoutUsdCents = 1000;
       const res = await requestPayoutForUser(user.Id, minPayoutUsdCents);
       if (res.ok) {
         return ctx.reply(
