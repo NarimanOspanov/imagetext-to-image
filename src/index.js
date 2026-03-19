@@ -1827,6 +1827,11 @@ function registerHandlers(bot, options = {}) {
       for (const row of photosets) {
         const prompt = row.Preset?.Prompt;
         if (!prompt) continue;
+        const photosetRetouchPrompt =
+          prompt +
+          '\n\n' +
+          'Дополнительная обработка лица: аккуратно убери припухлости, мелкие раны и покраснения кожи естественным способом, ' +
+          'как это делает профессиональный фотограф при ретуши. Сохрани естественность, текстуру кожи и узнаваемость человека.';
 
         const requestId = randomUUID();
         const { requestDir, responseDir } = await ensureMediaDirs(chatId, requestId);
@@ -1852,7 +1857,7 @@ function registerHandlers(bot, options = {}) {
           auditId = await createGenerationAudit(
             chatId,
             user.Id,
-            prompt,
+            photosetRetouchPrompt,
             requestId,
             attachedNames.join(','),
             userPhotoset.Id
@@ -1862,7 +1867,7 @@ function registerHandlers(bot, options = {}) {
         }
 
         try {
-          const images = await imagesAndTextToImage(imageParts, prompt, modelId);
+          const images = await imagesAndTextToImage(imageParts, photosetRetouchPrompt, modelId);
           if (!images || images.length === 0) {
             await updateGenerationAuditError(auditId, 'No image in response (photoset)');
             continue;
