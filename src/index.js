@@ -1901,6 +1901,9 @@ function registerHandlers(bot, options = {}) {
       await ctx.reply('Этот фотосет больше недоступен.');
       return;
     }
+    const photosetsCount = await models.Photosets.count({
+      where: { PhotosetConfigId: configId },
+    });
     const firstPhotosetRow = await models.Photosets.findOne({
       where: { PhotosetConfigId: configId },
       include: [{ model: models.Presets, attributes: ['Prompt'] }],
