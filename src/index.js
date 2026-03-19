@@ -1518,7 +1518,10 @@ function registerHandlers(bot, options = {}) {
       const parts = [];
       parts.push('Приглашение пользователей даёт 2 вещи:\n');
       if (enableBonusGens) {
-        parts.push(`1. Бесплатные ${generationsPerReferral} ${genWord} за каждого приглашенного пользователя\n`);
+        parts.push(`1. Бесплатные ${generationsPerReferral} ${genWord} за каждого приглашенного пользователя.\n`);
+        if (invited > 0) {
+          parts.push(`Приглашено: ${invited}\n`);
+        }
       }
       parts.push('2. Реальные деньги — да, мы делимся выручкой\n');
       parts.push('— 30% с оплат приглашённых пользователей');
@@ -1526,16 +1529,14 @@ function registerHandlers(bot, options = {}) {
       parts.push('Выплаты:');
       parts.push(`— Минимум для снятия: ${formatUsdCents(minPayoutUsdCents)}`);
       parts.push('— Перевод на карту (занимает до 48 часов)\n');
-      parts.push('Приглашай друзей по персональной ссылке');
-      parts.push(referralLink + '\n');
-      parts.push(`👥 Приглашено: ${invited}`);
-      parts.push(`🎁 Бонусные генерации фото: ${enableBonusGens ? bonusesReceived : 0}`);
       if (earnings) {
-        parts.push('');
-        parts.push('💰 Доход (USD):');
+        parts.push('Текущий баланс');
         parts.push(`— Доступно: ${formatUsdCents(earnings.available)}`);
         parts.push(`— Выплачено: ${formatUsdCents(earnings.paid)}`);
       }
+      parts.push('');
+      parts.push('Приглашай друзей по персональной ссылке');
+      parts.push(referralLink);
 
       const text = parts.join('\n');
 
