@@ -1903,27 +1903,22 @@ function registerHandlers(bot, options = {}) {
       await ctx.reply('Этот фотосет больше недоступен.');
       return;
     }
+    const firstPhotosetRow = await models.Photosets.findOne({
+      where: { PhotosetConfigId: configId },
+      include: [{ model: models.Presets, attributes: ['Prompt'] }],
+      order: [['Id', 'ASC']],
+    });
+    const previewPrompt = firstPhotosetRow?.Preset?.Prompt;
+    if (!previewPrompt || !String(previewPrompt).trim()) {
+      await ctx.reply('Для этого фотосета ещё не настроены промпты. Скоро добавим.');
+      return;
+    }
 
     const stopTyping = startTyping(ctx.telegram, chatId);
     const processingMsg = await ctx.reply('🔎 Делаю предпросмотр в стиле выбранной фотосессии...');
     try {
       const modelId = await getGeminiModelForUser(chatId);
-      const coverBuffer = config.Image ? await downloadBlobBuffer(`PhotosetCovers/${config.Image}`) : null;
-      const previewPrompt =
-        `Сделай превью фотосессии в стиле "${config.Name || 'выбранной фотосессии'}" на основе референса фотосета. ` +
-        'Критично: сохрани композицию коллажа из референса (раскладка кадров, ракурсы, позы, кадрирование) и белые разделительные линии между кадрами. ' +
-        'Замени ВСЕ лица и всех людей в каждом кадре коллажа на людей с загруженных фото пользователя. ' +
-        'Не оставляй ни одного исходного лица из референса, не смешивай лица из референса и пользователя. ' +
-        'Сделай реалистично, аккуратно, в едином стиле студийной обработки. ' +
-        'Это preview-вариант, но визуально качественный.';
-
-      const parts = coverBuffer
-        ? [
-            ...imageParts,
-            { buffer: coverBuffer, mimeType: getPhotoMimeType(config.Image) },
-          ]
-        : imageParts;
-      const images = await imagesAndTextToImage(parts, previewPrompt, modelId);
+      const images = await imagesAndTextToImage(imageParts, previewPrompt, modelId);
       if (!images || images.length === 0) {
         await ctx.telegram.deleteMessage(chatId, processingMsg.message_id).catch(() => {});
         await ctx.reply('Не удалось создать предпросмотр. Попробуй ещё раз.');
