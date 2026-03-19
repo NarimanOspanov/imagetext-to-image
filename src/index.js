@@ -584,6 +584,7 @@ function registerHandlers(bot, options = {}) {
     if (!chatId) return;
     pendingPhotosets.delete(chatId);
     pendingPresets.delete(chatId);
+    pendingPhotosetPreviews.delete(chatId);
     const stopTyping = startTyping(ctx.telegram, chatId);
     try {
       const username = ctx.from?.username ?? null;
@@ -1019,6 +1020,7 @@ function registerHandlers(bot, options = {}) {
   // —— Photosets: show presets-based photoshoot ideas and create photoset ——
   const pendingPhotosets = new Map(); // chatId -> { configId }
   const pendingPresets = new Map();   // chatId -> { presetId }
+  const pendingPhotosetPreviews = new Map(); // chatId -> { configId }
 
   function buildPhotosetKeyboard(configs, index) {
     const count = configs.length;
@@ -1034,6 +1036,12 @@ function registerHandlers(bot, options = {}) {
         {
           text: '➡️',
           callback_data: `photoset_next_${configs[nextIndex].Id}`,
+        },
+      ],
+      [
+        {
+          text: 'Предпросмотр результата',
+          callback_data: `photoset_preview_${current.Id}`,
         },
       ],
       [
@@ -1300,9 +1308,33 @@ function registerHandlers(bot, options = {}) {
         return ctx.reply('Для этого фотосета ещё не настроены промпты. Скоро добавим.');
       }
 
+      pendingPhotosetPreviews.delete(chatId);
       pendingPhotosets.set(chatId, { configId });
       await ctx.reply(
         'Отправь одну или несколько исходных фото людей одним сообщением. Я использую их как основу для этого фотосета.'
+      );
+    } finally {
+      stopTyping();
+    }
+  });
+
+  bot.action(/^photoset_preview_(\d+)$/, async (ctx) => {
+    const stopTyping = startTyping(ctx.telegram, ctx.chat?.id);
+    try {
+      if (ctx.callbackQuery) await ctx.answerCbQuery();
+      const configId = parseInt(ctx.match[1], 10);
+      const chatId = ctx.chat?.id;
+      const configRow = await models.PhotosetConfigs.findByPk(configId);
+      if (!configRow) {
+        return ctx.reply('Этот фотосет больше недоступен. Попробуй выбрать другой.');
+      }
+      pendingPhotosets.delete(chatId);
+      pendingPresets.delete(chatId);
+      pendingPhotosetPreviews.set(chatId, { configId });
+      await ctx.reply(
+        '🔎 Предпросмотр результата\n\n' +
+          'Отправь 1-3 фото одним сообщением — я сделаю превью в стиле выбранной фотосессии.\n\n' +
+          'Финальный результат после выбора фотосессии будет в HD-качестве.'
       );
     } finally {
       stopTyping();
@@ -1887,6 +1919,58 @@ function registerHandlers(bot, options = {}) {
     }
   }
 
+  async function runPhotosetPreviewGeneration(ctx, imageParts, configId) {
+    const chatId = ctx.chat.id;
+    const config = await models.PhotosetConfigs.findByPk(configId);
+    if (!config) {
+      await ctx.reply('Этот фотосет больше недоступен.');
+      return;
+    }
+
+    const stopTyping = startTyping(ctx.telegram, chatId);
+    const processingMsg = await ctx.reply('🔎 Делаю предпросмотр в стиле выбранной фотосессии...');
+    try {
+      const modelId = await getGeminiModelForUser(chatId);
+      const coverBuffer = config.Image ? await downloadBlobBuffer(`PhotosetCovers/${config.Image}`) : null;
+      const previewPrompt =
+        `Сделай превью фотосессии в стиле "${config.Name || 'выбранной фотосессии'}". ` +
+        'Используй загруженное фото пользователя как основной объект. ' +
+        'Результат должен быть реалистичным, аккуратным и похожим на финальную студийную обработку. ' +
+        'Важно: это именно preview-вариант для демонстрации стилистики.';
+
+      const parts = coverBuffer
+        ? [
+            ...imageParts,
+            { buffer: coverBuffer, mimeType: getPhotoMimeType(config.Image) },
+          ]
+        : imageParts;
+      const images = await imagesAndTextToImage(parts, previewPrompt, modelId);
+      if (!images || images.length === 0) {
+        await ctx.telegram.deleteMessage(chatId, processingMsg.message_id).catch(() => {});
+        await ctx.reply('Не удалось создать предпросмотр. Попробуй ещё раз.');
+        return;
+      }
+
+      await ctx.telegram.deleteMessage(chatId, processingMsg.message_id).catch(() => {});
+      await ctx.replyWithPhoto(
+        { source: images[0], filename: 'preview.png' },
+        {
+          caption:
+            '✅ Предпросмотр готов.\n' +
+            'Это demo-версия результата. После запуска фотосессии качество будет HD и набор кадров шире.',
+        }
+      );
+    } catch (err) {
+      console.error('Photoset preview generation error:', err);
+      const text = err?.message?.includes('SAFETY')
+        ? safetyBlockMessage
+        : 'Не удалось создать предпросмотр. Попробуй ещё раз.';
+      await ctx.telegram.editMessageText(chatId, processingMsg.message_id, null, text).catch(() => {});
+    } finally {
+      stopTyping();
+    }
+  }
+
   // Media group buffer: when user sends album, Telegram sends one update per photo with same media_group_id
   const MEDIA_GROUP_DELAY_MS = 1200;
   const MAX_PHOTOS_IN_GROUP = 10;
@@ -1901,6 +1985,19 @@ function registerHandlers(bot, options = {}) {
     if (items.length === 0) return;
     const chatId = ctx.chat?.id;
     if (!chatId) return;
+
+    // If user has a pending photoset preview request, generate preview first.
+    const pendingPreview = pendingPhotosetPreviews.get(chatId);
+    if (pendingPreview) {
+      pendingPhotosetPreviews.delete(chatId);
+      const downloadResults = await Promise.all(items.map((item) => downloadPhotoBuffer(bot, item.file_id)));
+      const imageParts = downloadResults.map(({ buffer, filePath }) => ({
+        buffer,
+        mimeType: getPhotoMimeType(filePath),
+      }));
+      await runPhotosetPreviewGeneration(ctx, imageParts, pendingPreview.configId);
+      return;
+    }
 
     // If user has a pending photoset selection, use these images as input for that photoset
     const pending = pendingPhotosets.get(chatId);
@@ -2028,6 +2125,15 @@ function registerHandlers(bot, options = {}) {
     }
 
     // Single photo (no album)
+    const pendingPreview = pendingPhotosetPreviews.get(ctx.chat.id);
+    if (pendingPreview) {
+      pendingPhotosetPreviews.delete(ctx.chat.id);
+      const { buffer: imageBuffer, filePath } = await downloadPhotoBuffer(bot, photo.file_id);
+      const mimeType = getPhotoMimeType(filePath);
+      await runPhotosetPreviewGeneration(ctx, [{ buffer: imageBuffer, mimeType }], pendingPreview.configId);
+      return;
+    }
+
     const pending = pendingPhotosets.get(ctx.chat.id);
     if (pending) {
       pendingPhotosets.delete(ctx.chat.id);
