@@ -1490,23 +1490,16 @@ function registerHandlers(bot, options = {}) {
 
       const parts = [];
       parts.push('Приглашение пользователей даёт 2 вещи:\n');
-      if (enableBonusGens) {
-        parts.push(`1. Бесплатные ${generationsPerReferral} ${genWord} за каждого приглашенного пользователя.\n`);
-        if (invited > 0) {
-          parts.push(`Приглашено: ${invited}\n`);
-        }
-      }
-      parts.push('2. Реальные деньги — да, мы делимся выручкой\n');
+      parts.push('1. Бесплатную фотосессию за каждого приглашенного пользователя.\n');
+      parts.push('2. Реальные деньги — да, мы делимся доходом\n');
       parts.push('— 30% с оплат приглашённых пользователей');
       parts.push('— 20% с оплат тех, кого пригласили те, кого пригласил ты\n');
       parts.push('Выплаты:');
       parts.push(`— Минимум для снятия: ${formatUsdCents(minPayoutUsdCents)}`);
       parts.push('— Перевод на карту (занимает до 48 часов)\n');
-      if (earnings) {
-        parts.push('Текущий баланс');
-        parts.push(`— Доступно: ${formatUsdCents(earnings.available)}`);
-        parts.push(`— Выплачено: ${formatUsdCents(earnings.paid)}`);
-      }
+      parts.push('Текущий баланс');
+      parts.push(`— Доступно: ${formatUsdCents(earnings?.available || 0)}`);
+      parts.push(`— Выплачено: ${formatUsdCents(earnings?.paid || 0)}`);
       parts.push('');
       parts.push('Приглашай друзей по персональной ссылке');
       parts.push(referralLink);
@@ -2452,7 +2445,7 @@ async function main() {
   // Set menu commands (shown when user taps Menu in bottom-left; emoji = icon next to command)
   const menuCommands = [
     { command: 'start', description: 'ℹ️ Что умеет бот' },
-    { command: 'photosets', description: '📸 Готовые фотосеты' },
+    { command: 'photosets', description: '📸 Ознакомиться с фотосессиями' },
     { command: 'referrals', description: '🎁 Бонусы за друзей' },
     { command: 'account', description: '💳 Мой баланс' },
     { command: 'help', description: '❓ Помощь' },
