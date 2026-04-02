@@ -248,7 +248,14 @@ router.get('/stats', adminAuth, async (req, res) => {
 
     const seriesByDate = {};
     dates.forEach((d) => {
-      seriesByDate[d] = { date: d, generations: 0, usersJoined: 0, usersByInvite: 0, payments: 0 };
+      seriesByDate[d] = {
+        date: d,
+        generations: 0,
+        usersJoined: 0,
+        usersByInvite: 0,
+        payments: 0,
+        requiredChannelUsers: 0,
+      };
     });
 
     const startStr = startDate.toISOString().slice(0, 19).replace('T', ' ');
@@ -291,6 +298,15 @@ router.get('/stats', adminAuth, async (req, res) => {
     (payRows || []).forEach((r) => {
       const d = r.d instanceof Date ? r.d.toISOString().slice(0, 10) : String(r.d).slice(0, 10);
       if (seriesByDate[d]) seriesByDate[d].payments = Number(r.c) || 0;
+    });
+
+    const [requiredChannelUserRows] = await sequelize.query(
+      `SELECT CONVERT(DATE, DateTime) AS d, COUNT(*) AS c FROM [dbo].[RequiredChannelUsers] WHERE DateTime >= :start GROUP BY CONVERT(DATE, DateTime)`,
+      { replacements: { start: startStr } }
+    );
+    (requiredChannelUserRows || []).forEach((r) => {
+      const d = r.d instanceof Date ? r.d.toISOString().slice(0, 10) : String(r.d).slice(0, 10);
+      if (seriesByDate[d]) seriesByDate[d].requiredChannelUsers = Number(r.c) || 0;
     });
 
     const series = dates.map((d) => seriesByDate[d]);

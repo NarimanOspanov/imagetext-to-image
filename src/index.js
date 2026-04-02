@@ -345,7 +345,21 @@ async function getMissingRequiredChannelsForUser(telegram, userId) {
     try {
       const member = await telegram.getChatMember(chatId, userId);
       const status = member?.status;
-      if (!okStatuses.has(status)) missing.push(ch);
+      if (!okStatuses.has(status)) {
+        missing.push(ch);
+        continue;
+      }
+      // Save follower metric (insert once per channel/user).
+      try {
+        await models.RequiredChannelUsers?.findOrCreate({
+          where: { ChannelId: String(ch.ChannelId), UserId: String(userId) },
+          defaults: { ChannelId: String(ch.ChannelId), UserId: String(userId), DateTime: new Date() },
+        });
+      } catch (e) {
+        if (e?.name !== 'SequelizeUniqueConstraintError') {
+          console.warn('RequiredChannelUsers upsert error:', e?.message ?? e);
+        }
+      }
     } catch (err) {
       // Any API error => treat as not subscribed for safety.
       console.warn('getChatMember check error:', ch.ChannelId, err?.message ?? err);
