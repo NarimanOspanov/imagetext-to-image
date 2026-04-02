@@ -19,6 +19,7 @@ import definePresetAudience from './PresetAudience.js';
 import definePresetTheme from './PresetTheme.js';
 import definePhotosetConfigAudience from './PhotosetConfigAudience.js';
 import definePhotosetConfigTheme from './PhotosetConfigTheme.js';
+import defineRequiredChannel from './RequiredChannel.js';
 
 /**
  * Initialize code-first models and associations. Call with the shared Sequelize instance.
@@ -45,6 +46,7 @@ export function initModels(sequelize) {
   const PresetTheme = definePresetTheme(sequelize);
   const PhotosetConfigAudience = definePhotosetConfigAudience(sequelize);
   const PhotosetConfigTheme = definePhotosetConfigTheme(sequelize);
+  const RequiredChannel = defineRequiredChannel(sequelize);
 
   User.hasMany(UserImageGeneration, { foreignKey: 'UserId' });
   UserImageGeneration.belongsTo(User, { foreignKey: 'UserId' });
@@ -155,6 +157,7 @@ export function initModels(sequelize) {
     PhotosetConfig,
     Photoset,
     UserPhotoset,
+    RequiredChannel,
     Users: User,
     UserImageGenerations: UserImageGeneration,
     GenerationAudits: GenerationAudit,
@@ -169,6 +172,7 @@ export function initModels(sequelize) {
     PhotosetConfigs: PhotosetConfig,
     Photosets: Photoset,
     UserPhotosets: UserPhotoset,
+    RequiredChannels: RequiredChannel,
     Audience,
     Theme,
     Audiences: Audience,

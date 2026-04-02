@@ -320,6 +320,41 @@ async function requestPayoutForUser(userId, minUsdCents = 5000) {
   return { ok: true, requestId: reqRow.Id, requestedUsdCents: available };
 }
 
+function normalizeChatId(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  if (/^-?\d+$/.test(s)) return Number(s);
+  return s;
+}
+
+async function getMissingRequiredChannelsForUser(telegram, userId) {
+  const channels = await models.RequiredChannels?.findAll({
+    where: { IsActive: true },
+    order: [['SortOrder', 'ASC'], ['Id', 'ASC']],
+  });
+  if (!channels || channels.length === 0) return [];
+
+  const okStatuses = new Set(['member', 'administrator', 'creator']);
+  const missing = [];
+  for (const ch of channels) {
+    const chatId = normalizeChatId(ch.ChannelId);
+    if (!chatId) {
+      missing.push(ch);
+      continue;
+    }
+    try {
+      const member = await telegram.getChatMember(chatId, userId);
+      const status = member?.status;
+      if (!okStatuses.has(status)) missing.push(ch);
+    } catch (err) {
+      // Any API error => treat as not subscribed for safety.
+      console.warn('getChatMember check error:', ch.ChannelId, err?.message ?? err);
+      missing.push(ch);
+    }
+  }
+  return missing;
+}
+
 function parseUsdToCents(value) {
   if (value == null) return null;
   const str = String(value).trim();
@@ -1299,9 +1334,27 @@ function registerHandlers(bot, options = {}) {
       if (ctx.callbackQuery) await ctx.answerCbQuery();
       const configId = parseInt(ctx.match[1], 10);
       const chatId = ctx.chat?.id;
+      const userId = ctx.from?.id;
       const configRow = await models.PhotosetConfigs.findByPk(configId);
       if (!configRow) {
         return ctx.reply('Этот фотосет больше недоступен. Попробуй выбрать другой.');
+      }
+      if (userId) {
+        const missingChannels = await getMissingRequiredChannelsForUser(ctx.telegram, userId);
+        if (missingChannels.length > 0) {
+          const links = missingChannels
+            .filter((ch) => ch.JoinUrl && String(ch.JoinUrl).trim())
+            .map((ch, i) => [{ text: `Подписаться на канал ${i + 1}`, url: String(ch.JoinUrl).trim() }]);
+          if (links.length > 0) {
+            await ctx.reply('Для предпросмотра подпишитесь на канал(ы):', {
+              reply_markup: { inline_keyboard: links },
+              disable_web_page_preview: true,
+            });
+          } else {
+            await ctx.reply('Для предпросмотра подпишитесь на обязательный канал и попробуйте снова.');
+          }
+          return;
+        }
       }
       const photosetsCount = await models.Photosets.count({
         where: { PhotosetConfigId: configId },
