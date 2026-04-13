@@ -369,6 +369,29 @@ async function getMissingRequiredChannelsForUser(telegram, userId) {
   return missing;
 }
 
+async function getRequiredChannelGateAfterGenerations() {
+  return Math.max(0, await getConfigInt('RequiredChannelGateAfterGenerations', 5));
+}
+
+async function getTotalGeneratedImagesForUser(chatId) {
+  if (!chatId) return 0;
+  const user = await models.Users.findOne({
+    where: { TelegramChatId: chatId },
+    attributes: ['Id'],
+  });
+  if (!user) return 0;
+  return models.UserImageGenerations.count({
+    where: { UserId: user.Id },
+  });
+}
+
+function cloneImageParts(imageParts = []) {
+  return imageParts.map((part) => ({
+    buffer: Buffer.from(part.buffer),
+    mimeType: part.mimeType,
+  }));
+}
+
 function parseUsdToCents(value) {
   if (value == null) return null;
   const str = String(value).trim();
@@ -1070,6 +1093,80 @@ function registerHandlers(bot, options = {}) {
   const pendingPhotosets = new Map(); // chatId -> { configId }
   const pendingPresets = new Map();   // chatId -> { presetId }
   const pendingPhotosetPreviews = new Map(); // chatId -> { configId }
+  const suspendedGenerationOps = new Map(); // chatId -> { type, payload, createdAt }
+  const SUSPENDED_OPERATION_TTL_MS = 30 * 60 * 1000;
+
+  function pruneSuspendedGenerationOps() {
+    const now = Date.now();
+    for (const [chatId, op] of suspendedGenerationOps.entries()) {
+      if (!op?.createdAt || now - op.createdAt > SUSPENDED_OPERATION_TTL_MS) {
+        suspendedGenerationOps.delete(chatId);
+      }
+    }
+  }
+
+  function setSuspendedGenerationOp(chatId, operation) {
+    if (!chatId || !operation) return;
+    pruneSuspendedGenerationOps();
+    const payload = { ...(operation.payload || {}) };
+    if (Array.isArray(payload.imageParts)) {
+      payload.imageParts = cloneImageParts(payload.imageParts);
+    }
+    suspendedGenerationOps.set(chatId, {
+      type: operation.type,
+      payload,
+      createdAt: Date.now(),
+    });
+  }
+
+  function getSuspendedGenerationOp(chatId) {
+    if (!chatId) return null;
+    const op = suspendedGenerationOps.get(chatId);
+    if (!op) return null;
+    if (!op.createdAt || Date.now() - op.createdAt > SUSPENDED_OPERATION_TTL_MS) {
+      suspendedGenerationOps.delete(chatId);
+      return null;
+    }
+    return op;
+  }
+
+  function clearSuspendedGenerationOp(chatId) {
+    if (!chatId) return;
+    suspendedGenerationOps.delete(chatId);
+  }
+
+  async function sendRequiredChannelsPrompt(ctx, missingChannels, gateAfterGenerations) {
+    const links = missingChannels
+      .filter((ch) => ch.JoinUrl && String(ch.JoinUrl).trim())
+      .map((ch, i) => [{ text: `Подписаться на канал ${i + 1}`, url: String(ch.JoinUrl).trim() }]);
+    links.push([{ text: 'Готово', callback_data: 'required_channels_done' }]);
+    const thresholdText =
+      gateAfterGenerations > 0
+        ? `После ${gateAfterGenerations} генераций нужно подписаться на обязательный канал(ы), чтобы продолжить.\n\n`
+        : '';
+    const hasAnyJoinLinks = links.length > 1;
+    const text = hasAnyJoinLinks
+      ? `${thresholdText}Подпишитесь на канал(ы) и нажмите «Готово».`
+      : `${thresholdText}Подпишитесь на обязательный канал и нажмите «Готово».`;
+    await ctx.reply(text, {
+      reply_markup: { inline_keyboard: links },
+      disable_web_page_preview: true,
+    });
+  }
+
+  async function ensureGenerationAllowedOrSuspend(ctx, operation) {
+    const chatId = ctx.chat?.id;
+    const userId = ctx.from?.id;
+    if (!chatId || !userId) return true;
+    const gateAfterGenerations = await getRequiredChannelGateAfterGenerations();
+    const totalGenerated = await getTotalGeneratedImagesForUser(chatId);
+    if (totalGenerated <= gateAfterGenerations) return true;
+    const missingChannels = await getMissingRequiredChannelsForUser(ctx.telegram, userId);
+    if (missingChannels.length === 0) return true;
+    if (operation) setSuspendedGenerationOp(chatId, operation);
+    await sendRequiredChannelsPrompt(ctx, missingChannels, gateAfterGenerations);
+    return false;
+  }
 
   function buildPhotosetKeyboard(configs, index) {
     const count = configs.length;
@@ -1173,8 +1270,15 @@ function registerHandlers(bot, options = {}) {
     }
   }
 
-  async function runPresetGeneration(ctx, imageParts, presetId) {
+  async function runPresetGeneration(ctx, imageParts, presetId, options = {}) {
     const chatId = ctx.chat.id;
+    if (!options.skipSubscriptionGate) {
+      const isAllowed = await ensureGenerationAllowedOrSuspend(ctx, {
+        type: 'preset',
+        payload: { presetId, imageParts },
+      });
+      if (!isAllowed) return;
+    }
     const preset = await models.Presets.findByPk(presetId);
     if (!preset) {
       await ctx.reply('Этот пресет больше недоступен.');
@@ -1189,6 +1293,7 @@ function registerHandlers(bot, options = {}) {
     }
     const stopTyping = startTyping(ctx.telegram, chatId);
     const processingMsg = await ctx.reply('📸 Создаю изображение по выбранному стилю...');
+    let auditId = null;
     try {
       const modelId = await getGeminiModelForUser(chatId);
       let user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
@@ -1219,7 +1324,6 @@ function registerHandlers(bot, options = {}) {
         await writeBufferToFile(part.buffer, join(requestDir, name));
         attachedNames.push(name);
       }
-      let auditId = null;
       try {
         auditId = await createGenerationAudit(
           chatId, user.Id, prompt, requestId, attachedNames.join(','), null
@@ -1348,27 +1452,9 @@ function registerHandlers(bot, options = {}) {
       if (ctx.callbackQuery) await ctx.answerCbQuery();
       const configId = parseInt(ctx.match[1], 10);
       const chatId = ctx.chat?.id;
-      const userId = ctx.from?.id;
       const configRow = await models.PhotosetConfigs.findByPk(configId);
       if (!configRow) {
         return ctx.reply('Этот фотосет больше недоступен. Попробуй выбрать другой.');
-      }
-      if (userId) {
-        const missingChannels = await getMissingRequiredChannelsForUser(ctx.telegram, userId);
-        if (missingChannels.length > 0) {
-          const links = missingChannels
-            .filter((ch) => ch.JoinUrl && String(ch.JoinUrl).trim())
-            .map((ch, i) => [{ text: `Подписаться на канал ${i + 1}`, url: String(ch.JoinUrl).trim() }]);
-          if (links.length > 0) {
-            await ctx.reply('Для предпросмотра подпишитесь на канал(ы):', {
-              reply_markup: { inline_keyboard: links },
-              disable_web_page_preview: true,
-            });
-          } else {
-            await ctx.reply('Для предпросмотра подпишитесь на обязательный канал и попробуйте снова.');
-          }
-          return;
-        }
       }
       const photosetsCount = await models.Photosets.count({
         where: { PhotosetConfigId: configId },
@@ -1772,12 +1858,16 @@ function registerHandlers(bot, options = {}) {
     },
   };
 
-  // Text message → text-to-image
-  bot.on('text', async (ctx) => {
+  async function runTextGeneration(ctx, prompt, options = {}) {
     if (!ctx.chat?.id) return;
-    const prompt = ctx.message.text.trim();
     if (!prompt) return ctx.reply('Опиши, какую картинку нужно сгенерировать.');
-
+    if (!options.skipSubscriptionGate) {
+      const isAllowed = await ensureGenerationAllowedOrSuspend(ctx, {
+        type: 'text',
+        payload: { prompt },
+      });
+      if (!isAllowed) return;
+    }
     const needed = config.maxImagesPerRequest;
     const { total } = await getAvailableGenerations(ctx.chat.id);
     if (total < needed) {
@@ -1829,11 +1919,172 @@ function registerHandlers(bot, options = {}) {
     } finally {
       stopTyping();
     }
+  }
+
+  async function runImagePromptGeneration(ctx, imageParts, caption, options = {}) {
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+    if (!options.skipSubscriptionGate) {
+      const isAllowed = await ensureGenerationAllowedOrSuspend(ctx, {
+        type: 'image_prompt',
+        payload: { caption, imageParts },
+      });
+      if (!isAllowed) return;
+    }
+    const { total } = await getAvailableGenerations(chatId);
+    if (total < 1) {
+      const msg = await getNoGenerationsMessage();
+      await ctx.reply(msg, noGenerationsReplyMarkup);
+      return;
+    }
+
+    const stopTyping = startTyping(ctx.telegram, chatId);
+    const msg = await ctx.reply('💫 Обрабатываю твой запрос, сейчас будет красиво...');
+    const modelId = await getGeminiModelForUser(chatId);
+    const requestId = randomUUID();
+    const { requestDir, responseDir } = await ensureMediaDirs(chatId, requestId);
+    const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
+    let auditId = null;
+    try {
+      auditId = await createGenerationAudit(chatId, user?.Id ?? null, caption, requestId, null);
+    } catch (e) {
+      console.error('Audit create:', e);
+    }
+    try {
+      const attachedNames = [];
+      for (let i = 0; i < imageParts.length; i++) {
+        const part = imageParts[i];
+        const ext = part.mimeType === 'image/png' ? 'png' : 'jpg';
+        const name = `${requestId}_att_${i + 1}.${ext}`;
+        await writeBufferToFile(part.buffer, join(requestDir, name));
+        attachedNames.push(name);
+      }
+      if (auditId != null) {
+        await models.GenerationAudits.update(
+          { AttachedImageFileNames: attachedNames.join(',') },
+          { where: { Id: auditId } }
+        );
+      }
+      const images =
+        imageParts.length === 1
+          ? await imageAndTextToImage(imageParts[0].buffer, imageParts[0].mimeType, caption, modelId)
+          : await imagesAndTextToImage(imageParts, caption, modelId);
+      if (images.length === 0) {
+        await updateGenerationAuditError(auditId, 'No image in response');
+        await ctx.telegram.editMessageText(
+          chatId,
+          msg.message_id,
+          null,
+          'Изображение не создано. Попробуй другое фото или подпись.'
+        );
+        return;
+      }
+      const resultNames = images.map((_, i) =>
+        images.length > 1 ? `${requestId}_result_${i + 1}.png` : `${requestId}_result.png`
+      );
+      await Promise.all(images.map((img, i) => writeBufferToFile(img, join(responseDir, resultNames[i]))));
+      await updateGenerationAuditSuccess(auditId, resultNames.join(','));
+      await ctx.telegram.deleteMessage(chatId, msg.message_id);
+      for (const buffer of images) {
+        await ctx.replyWithPhoto({ source: buffer, filename: 'image.png' });
+      }
+      await consumeGenerations(chatId, images.length);
+      await recordImageGenerations(chatId, images.length);
+    } catch (err) {
+      console.error('Image+text-to-image error:', err);
+      await updateGenerationAuditError(auditId, err?.message ?? String(err));
+      const errText = err?.message?.includes('SAFETY')
+        ? safetyBlockMessage
+        : 'Не удалось обработать изображение. Попробуй ещё раз.';
+      await ctx.telegram
+        .editMessageText(chatId, msg.message_id, null, errText)
+        .catch(() => {});
+    } finally {
+      stopTyping();
+    }
+  }
+
+  async function resumeSuspendedGeneration(ctx, operation) {
+    if (!operation) return;
+    switch (operation.type) {
+      case 'text':
+        await runTextGeneration(ctx, operation.payload?.prompt || '', { skipSubscriptionGate: true });
+        return;
+      case 'image_prompt':
+        await runImagePromptGeneration(
+          ctx,
+          cloneImageParts(operation.payload?.imageParts || []),
+          operation.payload?.caption || '',
+          { skipSubscriptionGate: true }
+        );
+        return;
+      case 'preset':
+        await runPresetGeneration(
+          ctx,
+          cloneImageParts(operation.payload?.imageParts || []),
+          operation.payload?.presetId,
+          { skipSubscriptionGate: true }
+        );
+        return;
+      case 'photoset':
+        await runPhotosetGeneration(
+          ctx,
+          cloneImageParts(operation.payload?.imageParts || []),
+          operation.payload?.configId,
+          { skipSubscriptionGate: true }
+        );
+        return;
+      case 'photoset_preview':
+        await runPhotosetPreviewGeneration(
+          ctx,
+          cloneImageParts(operation.payload?.imageParts || []),
+          operation.payload?.configId,
+          { skipSubscriptionGate: true }
+        );
+        return;
+      default:
+        await ctx.reply('Не удалось восстановить операцию. Отправь запрос заново.');
+    }
+  }
+
+  bot.action('required_channels_done', async (ctx) => {
+    if (ctx.callbackQuery) await ctx.answerCbQuery();
+    const chatId = ctx.chat?.id;
+    const userId = ctx.from?.id;
+    if (!chatId || !userId) return;
+    const operation = getSuspendedGenerationOp(chatId);
+    if (!operation) {
+      await ctx.reply('Ожидающей операции нет. Отправь новый запрос.');
+      return;
+    }
+    const missingChannels = await getMissingRequiredChannelsForUser(ctx.telegram, userId);
+    if (missingChannels.length > 0) {
+      const gateAfterGenerations = await getRequiredChannelGateAfterGenerations();
+      await sendRequiredChannelsPrompt(ctx, missingChannels, gateAfterGenerations);
+      return;
+    }
+    clearSuspendedGenerationOp(chatId);
+    await ctx.reply('Подписка подтверждена. Продолжаю обработку...');
+    await resumeSuspendedGeneration(ctx, operation);
+  });
+
+  // Text message → text-to-image
+  bot.on('text', async (ctx) => {
+    if (!ctx.chat?.id) return;
+    const prompt = ctx.message.text.trim();
+    return runTextGeneration(ctx, prompt);
   });
 
   // Photoset generation helper: reuse uploaded images as references for all prompts in the set
-  async function runPhotosetGeneration(ctx, imageParts, configId) {
+  async function runPhotosetGeneration(ctx, imageParts, configId, options = {}) {
     const chatId = ctx.chat.id;
+    if (!options.skipSubscriptionGate) {
+      const isAllowed = await ensureGenerationAllowedOrSuspend(ctx, {
+        type: 'photoset',
+        payload: { configId, imageParts },
+      });
+      if (!isAllowed) return;
+    }
 
     const photosets = await models.Photosets.findAll({
       where: { PhotosetConfigId: configId },
@@ -1958,8 +2209,15 @@ function registerHandlers(bot, options = {}) {
     }
   }
 
-  async function runPhotosetPreviewGeneration(ctx, imageParts, configId) {
+  async function runPhotosetPreviewGeneration(ctx, imageParts, configId, options = {}) {
     const chatId = ctx.chat.id;
+    if (!options.skipSubscriptionGate) {
+      const isAllowed = await ensureGenerationAllowedOrSuspend(ctx, {
+        type: 'photoset_preview',
+        payload: { configId, imageParts },
+      });
+      if (!isAllowed) return;
+    }
     const config = await models.PhotosetConfigs.findByPk(configId);
     if (!config) {
       await ctx.reply('Этот фотосет больше недоступен.');
@@ -2086,73 +2344,12 @@ function registerHandlers(bot, options = {}) {
       return;
     }
 
-    const { total } = await getAvailableGenerations(chatId);
-    if (total < 1) {
-      const msg = await getNoGenerationsMessage();
-      await ctx.reply(msg, noGenerationsReplyMarkup);
-      return;
-    }
-
-    const stopTyping = startTyping(ctx.telegram, chatId);
-    const msg = await ctx.reply('💫 Обрабатываю твой запрос, сейчас будет красиво...');
-    const modelId = await getGeminiModelForUser(chatId);
-    const requestId = randomUUID();
-    const { requestDir, responseDir } = await ensureMediaDirs(chatId, requestId);
-    const user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
-    let auditId = null;
-    try {
-      auditId = await createGenerationAudit(chatId, user?.Id ?? null, caption, requestId, null);
-    } catch (e) {
-      console.error('Audit create:', e);
-    }
-    try {
-      const imageParts = [];
-      const attachedNames = [];
-      const downloadResults = await Promise.all(items.map((item) => downloadPhotoBuffer(bot, item.file_id)));
-      for (let i = 0; i < downloadResults.length; i++) {
-        const { buffer, filePath } = downloadResults[i];
-        const ext = (getPhotoMimeType(filePath) === 'image/png') ? 'png' : 'jpg';
-        const name = `${requestId}_att_${i + 1}.${ext}`;
-        await writeBufferToFile(buffer, join(requestDir, name));
-        attachedNames.push(name);
-        imageParts.push({ buffer, mimeType: getPhotoMimeType(filePath) });
-      }
-      if (auditId != null) {
-        await models.GenerationAudits.update(
-          { AttachedImageFileNames: attachedNames.join(',') },
-          { where: { Id: auditId } }
-        );
-      }
-      const images = await imagesAndTextToImage(imageParts, caption, modelId);
-      if (images.length === 0) {
-        await updateGenerationAuditError(auditId, 'No image in response');
-        await ctx.telegram.editMessageText(
-          ctx.chat.id, msg.message_id, null,
-          'Изображение не создано. Попробуй другое фото или подпись.'
-        );
-        return;
-      }
-      const resultNames = images.map((_, i) =>
-        images.length > 1 ? `${requestId}_result_${i + 1}.png` : `${requestId}_result.png`
-      );
-      await Promise.all(images.map((img, i) => writeBufferToFile(img, join(responseDir, resultNames[i]))));
-      await updateGenerationAuditSuccess(auditId, resultNames.join(','));
-      await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id);
-      for (const buffer of images) {
-        await ctx.replyWithPhoto({ source: buffer, filename: 'image.png' });
-      }
-      await consumeGenerations(ctx.chat.id, images.length);
-      await recordImageGenerations(ctx.chat.id, images.length);
-    } catch (err) {
-      console.error('Image+text-to-image (group) error:', err);
-      await updateGenerationAuditError(auditId, err?.message ?? String(err));
-      const groupErrText = err?.message?.includes('SAFETY') ? safetyBlockMessage : 'Не удалось обработать изображение. Попробуй ещё раз.';
-      await ctx.telegram
-        .editMessageText(ctx.chat.id, msg.message_id, null, groupErrText)
-        .catch(() => {});
-    } finally {
-      stopTyping();
-    }
+    const downloadResults = await Promise.all(items.map((item) => downloadPhotoBuffer(bot, item.file_id)));
+    const imageParts = downloadResults.map(({ buffer, filePath }) => ({
+      buffer,
+      mimeType: getPhotoMimeType(filePath),
+    }));
+    await runImagePromptGeneration(ctx, imageParts, caption);
   }
 
   // Photo (with optional caption) → image + text to image. Multiple photos in album = one request.
@@ -2213,66 +2410,9 @@ function registerHandlers(bot, options = {}) {
       return;
     }
 
-    const { total } = await getAvailableGenerations(ctx.chat.id);
-    if (total < 1) {
-      const msg = await getNoGenerationsMessage();
-      return ctx.reply(msg, noGenerationsReplyMarkup);
-    }
-
-    const stopTyping = startTyping(ctx.telegram, ctx.chat.id);
-    const msg = await ctx.reply('💫 Обрабатываю твой запрос, сейчас будет красиво...');
-    const modelId = await getGeminiModelForUser(ctx.chat.id);
-    const requestId = randomUUID();
-    const { requestDir, responseDir } = await ensureMediaDirs(ctx.chat.id, requestId);
-    const user = await models.Users.findOne({ where: { TelegramChatId: ctx.chat.id } });
-    let auditId = null;
-    try {
-      auditId = await createGenerationAudit(ctx.chat.id, user?.Id ?? null, caption, requestId, null);
-    } catch (e) {
-      console.error('Audit create:', e);
-    }
-    try {
-      const { buffer: imageBuffer, filePath } = await downloadPhotoBuffer(bot, photo.file_id);
-      const mimeType = getPhotoMimeType(filePath);
-      const ext = mimeType === 'image/png' ? 'png' : 'jpg';
-      const attName = `${requestId}_att_1.${ext}`;
-      await writeBufferToFile(imageBuffer, join(requestDir, attName));
-      if (auditId != null) {
-        await models.GenerationAudits.update(
-          { AttachedImageFileNames: attName },
-          { where: { Id: auditId } }
-        );
-      }
-      const images = await imageAndTextToImage(imageBuffer, mimeType, caption, modelId);
-      if (images.length === 0) {
-        await updateGenerationAuditError(auditId, 'No image in response');
-        await ctx.telegram.editMessageText(
-          ctx.chat.id, msg.message_id, null,
-          'Изображение не создано. Попробуй другое фото или подпись.'
-        );
-        return;
-      }
-      const resultNames = images.map((_, i) =>
-        images.length > 1 ? `${requestId}_result_${i + 1}.png` : `${requestId}_result.png`
-      );
-      await Promise.all(images.map((img, i) => writeBufferToFile(img, join(responseDir, resultNames[i]))));
-      await updateGenerationAuditSuccess(auditId, resultNames.join(','));
-      await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id);
-      for (const buffer of images) {
-        await ctx.replyWithPhoto({ source: buffer, filename: 'image.png' });
-      }
-      await consumeGenerations(ctx.chat.id, images.length);
-      await recordImageGenerations(ctx.chat.id, images.length);
-    } catch (err) {
-      console.error('Image+text-to-image error:', err);
-      await updateGenerationAuditError(auditId, err?.message ?? String(err));
-      const photoErrText = err?.message?.includes('SAFETY') ? safetyBlockMessage : 'Не удалось обработать изображение. Попробуй ещё раз.';
-      await ctx.telegram
-        .editMessageText(ctx.chat.id, msg.message_id, null, photoErrText)
-        .catch(() => {});
-    } finally {
-      stopTyping();
-    }
+    const { buffer: imageBuffer, filePath } = await downloadPhotoBuffer(bot, photo.file_id);
+    const mimeType = getPhotoMimeType(filePath);
+    await runImagePromptGeneration(ctx, [{ buffer: imageBuffer, mimeType }], caption);
   });
 
   bot.catch((err, ctx) => {
