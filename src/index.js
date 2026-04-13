@@ -2031,7 +2031,10 @@ function registerHandlers(bot, options = {}) {
           ctx,
           cloneImageParts(operation.payload?.imageParts || []),
           operation.payload?.configId,
-          { skipSubscriptionGate: true }
+          {
+            skipSubscriptionGate: true,
+            startFromIndex: Math.max(0, Number(operation.payload?.startFromIndex) || 0),
+          }
         );
         return;
       case 'photoset_preview':
@@ -2078,13 +2081,7 @@ function registerHandlers(bot, options = {}) {
   // Photoset generation helper: reuse uploaded images as references for all prompts in the set
   async function runPhotosetGeneration(ctx, imageParts, configId, options = {}) {
     const chatId = ctx.chat.id;
-    if (!options.skipSubscriptionGate) {
-      const isAllowed = await ensureGenerationAllowedOrSuspend(ctx, {
-        type: 'photoset',
-        payload: { configId, imageParts },
-      });
-      if (!isAllowed) return;
-    }
+    const startFromIndex = Math.max(0, Number(options.startFromIndex) || 0);
 
     const photosets = await models.Photosets.findAll({
       where: { PhotosetConfigId: configId },
@@ -2113,6 +2110,8 @@ function registerHandlers(bot, options = {}) {
 
     try {
       const modelId = await getGeminiModelForUser(chatId);
+      const gateAfterGenerations = await getRequiredChannelGateAfterGenerations();
+      const totalGeneratedBeforeRun = await getTotalGeneratedImagesForUser(chatId);
       let user = await models.Users.findOne({ where: { TelegramChatId: chatId } });
       if (!user) {
         try {
@@ -2133,10 +2132,34 @@ function registerHandlers(bot, options = {}) {
       }
 
       let generatedCount = 0;
+      const flushGeneratedProgress = async () => {
+        if (generatedCount <= 0) return;
+        await consumeGenerations(chatId, generatedCount);
+        await recordImageGenerations(chatId, generatedCount);
+        generatedCount = 0;
+      };
 
-      for (const row of photosets) {
+      for (let rowIndex = startFromIndex; rowIndex < photosets.length; rowIndex += 1) {
+        const row = photosets[rowIndex];
         const prompt = row.Preset?.Prompt;
         if (!prompt) continue;
+        if (!options.skipSubscriptionGate && totalGeneratedBeforeRun + generatedCount >= gateAfterGenerations) {
+          const userId = ctx.from?.id;
+          const missingChannels = userId
+            ? await getMissingRequiredChannelsForUser(ctx.telegram, userId)
+            : [];
+          if (missingChannels.length > 0) {
+            await flushGeneratedProgress();
+            clearSuspendedGenerationOp(chatId);
+            setSuspendedGenerationOp(chatId, {
+              type: 'photoset',
+              payload: { configId, imageParts, startFromIndex: rowIndex },
+            });
+            await ctx.telegram.deleteMessage(chatId, processingMsg.message_id).catch(() => {});
+            await sendRequiredChannelsPrompt(ctx, missingChannels, gateAfterGenerations);
+            return;
+          }
+        }
         const photosetRetouchPrompt =
           prompt +
           '\n\n' +
@@ -2194,8 +2217,7 @@ function registerHandlers(bot, options = {}) {
       }
 
       if (generatedCount > 0) {
-        await consumeGenerations(chatId, generatedCount);
-        await recordImageGenerations(chatId, generatedCount);
+        await flushGeneratedProgress();
         await ctx.telegram.deleteMessage(chatId, processingMsg.message_id).catch(() => {});
         await ctx.reply('Готово! Вот твой фотосет.');
       } else {
