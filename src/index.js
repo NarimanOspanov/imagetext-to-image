@@ -2098,7 +2098,9 @@ function registerHandlers(bot, options = {}) {
     }
 
     const { total } = await getAvailableGenerations(chatId);
-    const needed = prompts.length;
+    const needed = photosets
+      .slice(startFromIndex)
+      .reduce((sum, row) => sum + (row.Preset?.Prompt ? 1 : 0), 0);
     if (total < needed) {
       const msg = await getNoGenerationsMessage();
       await ctx.reply(msg, noGenerationsReplyMarkup);
